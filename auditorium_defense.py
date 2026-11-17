@@ -697,16 +697,40 @@ class Interface:
             self.draw_result(game.phase == 'win')
 
 
+
+    
+
 class PygameCanvas:
     def __init__(self, pygame, screen):
         self.pg, self.screen = pygame, screen
-        self.art = {name: pygame.image.load(BytesIO(b64decode(data)), f'{name}.png').convert_alpha()
-                    for name, data in PROPOSAL_ART.items()}
-        windows_font = Path(os.environ.get('WINDIR', 'C:/Windows')) / 'Fonts' / 'msjh.ttc'
-        self.font_file = str(windows_font) if windows_font.is_file() else pygame.font.match_font(
-            'microsoftjhenghei,pingfangtc,notosanscjktc,notosanscjk,wenquanyizenhei')
-        self.chinese = self.font_file is not None
+
+        self.art = {
+            name: pygame.image.load(
+                BytesIO(b64decode(data)), f'{name}.png'
+            ).convert_alpha()
+            for name, data in PROPOSAL_ART.items()
+        }
+
+        self.font_file = (
+            Path(__file__).resolve().parent
+            / 'assets' / 'fonts' / 'NotoSansTC.ttf'
+        )
+
+        if not self.font_file.is_file():
+            raise FileNotFoundError(
+                f'找不到中文字型：{self.font_file}'
+            )
+
+        self.font_file = str(self.font_file)
+        self.chinese = True
         self.fonts = {}
+
+        # 測試字型能否正常渲染中文字
+        test_font = pygame.font.Font(self.font_file, 20)
+        test_surface = test_font.render(
+            "清大大禮堂", True, (255, 255, 255)
+        )
+        print("Font test successful:", test_surface.get_size())
 
     def clear(self, color):
         self.screen.fill(color)
@@ -743,10 +767,16 @@ class PygameCanvas:
     def text(self, x, y, value, size, color, anchor):
         if size not in self.fonts:
             self.fonts[size] = self.pg.font.Font(self.font_file, size)
+
         surface = self.fonts[size].render(value, True, color)
         box = surface.get_rect()
-        setattr(box, {'w': 'midleft', 'e': 'midright', 'center': 'center'}[anchor], (int(x), int(y)))
+        setattr(
+            box,
+            {'w': 'midleft', 'e': 'midright', 'center': 'center'}[anchor],
+            (int(x), int(y))
+        )
         self.screen.blit(surface, box)
+
 
 
 class TkCanvas:
