@@ -1,7 +1,7 @@
 """Pygame and Tkinter drawing adapters."""
 
 from pathlib import Path
-from .artwork import ARTWORK_FILES, SPRITE_DOWNSAMPLE, SPRITE_SIZES
+from .artwork import ARTWORK_FILES, SPRITE_SIZES
 
 class PygameCanvas:
     def __init__(self, pygame, screen):
@@ -57,7 +57,8 @@ class PygameCanvas:
 
     def circle(self, x, y, radius, color, outline=None, width=1):
         center = int(x), int(y)
-        self.pg.draw.circle(self.screen, color, center, int(radius))
+        if color:
+            self.pg.draw.circle(self.screen, color, center, int(radius))
         if outline:
             self.pg.draw.circle(self.screen, outline, center, int(radius), width)
 
@@ -90,11 +91,7 @@ class TkCanvas:
         self.canvas = canvas
         self.art = {}
         for name, path in ARTWORK_FILES.items():
-            image = PhotoImage(master=canvas, file=str(path))
-            downsample = SPRITE_DOWNSAMPLE.get(name)
-            if downsample:
-                image = image.subsample(downsample, downsample)
-            self.art[name] = image
+            self.art[name] = PhotoImage(master=canvas, file=str(path))
         available = set(families)
         preferred = ('Microsoft JhengHei UI', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans CJK TC', 'WenQuanYi Zen Hei')
         self.family = next((name for name in preferred if name in available), None)
@@ -119,7 +116,7 @@ class TkCanvas:
         self.canvas.create_rectangle(x, y, x + width, y + height, fill=color, outline=outline or '', width=line_width)
 
     def circle(self, x, y, radius, color, outline=None, width=1):
-        self.canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill=color,
+        self.canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill=color or '',
                                 outline=outline or '', width=width)
 
     def line(self, start, end, color, width=1):
