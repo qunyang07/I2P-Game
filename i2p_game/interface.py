@@ -1,6 +1,12 @@
 """Input handling and game screen drawing."""
 
-from .config import BASE, BG, BLUE, BORDER, DEFENSES, ENEMY_KINDS, ENTRANCES, FIELD, GOLD, GREEN, MAX_BASE_HP, MUTED, PADS, PANEL, PURPLE, RED, SIDE, TEXT, UPGRADES, WAVES
+from .config import (
+    BASE, BG, BLUE, BORDER, BOSS_WAVE, DEFENSES, ENEMY_KINDS,
+    FIELD, GOLD, GREEN, MAX_BASE_HP, MUTED, PADS, PANEL,
+    FIELD2_START_WAVE, PLAYER_MELEE_FLASH_DURATION, PLAYER_MELEE_RANGE,
+    PURPLE, RED, SIDE, TEXT,
+    UPGRADES, WAVES,
+)
 from .models import Button
 from .game import Game
 from .geometry import distance, inside
@@ -9,6 +15,7 @@ class Interface:
     def __init__(self, canvas):
         self.canvas = canvas
         self.game = Game()
+        self.game.phase = 'help'
         self.keys = set()
         self.buttons = []
         self.pointer = (-1, -1)
@@ -25,12 +32,12 @@ class Interface:
     def label(self, x, y, chinese, english, size=18, color=TEXT, anchor='w'):
         self.text(x, y, self.word(chinese, english), size, color, anchor)
 
-    def button(self, x, y, width, height, title, action, accent=BLUE, primary=False):
+    def button(self, x, y, width, height, title, action, accent=BLUE, primary=False, size=16):
         bounds = (x, y, width, height)
         hover = inside(*self.pointer, bounds)
         fill = accent if primary else ('#294355' if hover else '#203345')
         self.canvas.rect(*bounds, fill, outline=accent if hover or primary else BORDER)
-        self.text(x + width / 2, y + height / 2, self.word(*title), 16,
+        self.text(x + width / 2, y + height / 2, self.word(*title), size,
                   BG if primary else TEXT, 'center')
         self.buttons.append(Button(bounds, action))
 
@@ -77,11 +84,16 @@ class Interface:
                 self.start()
             elif key == 'h':
                 self.help()
-        elif phase == 'help' and key in ('escape', 'enter'):
-            self.title()
+        elif phase == 'help':
+            if key == 'escape':
+                self.title()
+            elif key == 'enter':
+                self.start()
         elif phase in ('combat', 'prepare'):
             if key == 'escape':
                 self.pause()
+            elif phase == 'combat' and key == 'space':
+                self.game.manual_attack()
             elif phase == 'prepare':
                 if key == 'enter':
                     self.game.advance_wave()
@@ -91,7 +103,7 @@ class Interface:
                     self.game.upgrade_tower()
                 elif key == 'tab':
                     self.game.selected_pad = (self.game.selected_pad + 1) % len(PADS)
-                elif key in ('1', '2', '3'):
+                elif key in ('1', '2', '3', '4', '5'):
                     self.game.build(int(key) - 1)
         elif phase == 'upgrade' and key in ('1', '2', '3'):
             self.game.choose_upgrade(int(key) - 1)
@@ -116,6 +128,11 @@ class Interface:
             if inside(x, y, button.bounds):
                 button.action()
                 return
+        if self.game.phase == 'combat':
+            left, top, width, height = FIELD
+            if left <= x < left + width and top <= y < top + height:
+                self.game.manual_attack()
+            return
         if self.game.phase == 'prepare':
             for index, (px, py) in enumerate(PADS):
                 if distance(x, y, px, py) <= 30:
@@ -133,20 +150,11 @@ class Interface:
     def draw_field(self):
         draw = self.canvas
         draw.rect(*FIELD, '#132931', outline='#38535d')
-        draw.image('field', FIELD[0] + 1, FIELD[1] + 1)
-        for entry in ENTRANCES:
-            draw.line(entry, BASE, '#506662', width=2)
-            draw.circle(*entry, 8, '#422e36', outline='#9e5455')
+        background = 'field2' if self.game.wave >= FIELD2_START_WAVE else 'field1'
+        draw.image(background, FIELD[0] + 1, FIELD[1] + 1)
         draw.circle(*BASE, 108, '#1c373a')
         draw.circle(*BASE, 75, '#203e43', outline='#4b7275', width=2)
-        draw.rect(365, 344, 120, 63, '#314958', outline='#556f7c')
-        draw.rect(365, 389, 120, 16, '#6f8895')
-        for x in (376, 395, 445, 464):
-            draw.rect(x, 349, 9, 39, '#a0bbc4')
-        draw.rect(413, 359, 25, 30, '#172a38')
-        draw.polygon(((356, 346), (425, 316), (494, 346)), '#a67364', outline='#d4a28a')
-        draw.rect(361, 405, 128, 6, '#8ba3ad')
-        draw.rect(356, 411, 138, 5, '#526c7b')
+        draw.image('auditorium_logo', BASE[0] - 60, BASE[1] - 40)
         self.label(425, 434, '清大大禮堂', 'NTHU AUDITORIUM', 13, '#c8e4e6', 'center')
         for index, (x, y) in enumerate(PADS):
             tower = self.game.towers[index]
@@ -156,10 +164,15 @@ class Interface:
                 self.text(x, y, str(index + 1), 17, BLUE if selected else MUTED, 'center')
             else:
                 defense = DEFENSES[tower.kind]
-                draw.rect(x - 11, y - 9, 22, 20, defense.color, outline=TEXT if tower.upgraded else None)
-                draw.line((x, y), (x + 12, y - 13), defense.color, width=6)
+                draw.sprite(defense.artwork, x, y + 22)
                 if tower.upgraded:
-                    draw.circle(x, y + 16, 3, TEXT)
+                    draw.circle(x, y + 17, 3, TEXT)
+                if tower.max_hp and (defense.mode == 'wall' or tower.hp < tower.max_hp):
+                    self.bar(x - 24, y + 23, 48, 4, tower.hp / tower.max_hp, RED)
+                if tower.effect > 0 and defense.mode == 'stun':
+                    draw.circle(x, y, 36, None, outline=defense.color, width=2)
+                elif tower.effect > 0 and defense.mode == 'trap':
+                    draw.circle(x, y, 34, None, outline=defense.color, width=2)
 
     def draw_entities(self):
         draw, game = self.canvas, self.game
@@ -172,20 +185,30 @@ class Interface:
         for enemy in game.enemies:
             kind = ENEMY_KINDS[enemy.kind]
             x, y, radius = enemy.x, enemy.y, kind.radius
-            if enemy.slowed:
+            if enemy.stunned:
+                draw.circle(x, y, radius + 7, '#4e613c', outline=GOLD, width=2)
+            elif enemy.slowed:
                 draw.circle(x, y, radius + 4, '#427085', outline=BLUE)
             draw.circle(x, y, radius, '#63323c', outline=kind.color, width=2)
-            art = 'bear' if enemy.kind == 0 else 'runner'
-            sprite_top = draw.sprite(art, x, y + 6)
-            if enemy.hp < enemy.max_hp:
+            sprite_top = draw.sprite(kind.artwork, x, y + (24 if kind.boss else 8))
+            if enemy.hp < enemy.max_hp and not kind.boss:
                 self.bar(x - 13, sprite_top - 5, 26, 3, enemy.hp / enemy.max_hp, RED)
         for shot in game.shots:
             draw.line(shot.origin, shot.target, shot.color, width=2)
             draw.circle(*shot.target, 4, shot.color)
+            if shot.artwork:
+                draw.sprite(shot.artwork, shot.target[0], shot.target[1] + 8)
+        for egg in game.boss_eggs:
+            draw.circle(egg.x, egg.y, 12, '#4a375b', outline=PURPLE, width=2)
+            draw.sprite('egg', egg.x, egg.y + 10)
         x, y = game.player_x, game.player_y
         if game.hurt_wait <= 0 or int(game.hurt_wait * 24) % 2 == 0:
             draw.circle(x, y, 15, '#224e68', outline=BLUE, width=2)
             draw.sprite('defender', x, y + 7)
+        if game.melee_flash > 0:
+            progress = 1 - game.melee_flash / PLAYER_MELEE_FLASH_DURATION
+            reach = PLAYER_MELEE_RANGE * (0.58 + 0.42 * progress)
+            draw.circle(x, y, reach, None, outline=GOLD, width=4)
 
     def bar(self, x, y, width, height, fraction, color):
         self.canvas.rect(x, y, width, height, '#0b1923')
@@ -211,6 +234,27 @@ class Interface:
         self.label(1019, 39, '能量', 'ENERGY', 14, PURPLE)
         self.text(1019, 65, str(game.energy), 20, PURPLE)
 
+    def draw_boss_bar(self):
+        boss = next((enemy for enemy in self.game.enemies
+                     if ENEMY_KINDS[enemy.kind].boss and enemy.hp > 0), None)
+        if boss is None:
+            return
+        x, y, width = FIELD[0] + 90, FIELD[1] + 10, FIELD[2] - 180
+        phase = max(1, self.game.boss_phase)
+        self.label(x + width / 2, y, f'最終 Boss・階段 {phase}/3',
+                   f'FINAL BOSS · PHASE {phase}/3', 11, TEXT, 'center')
+        colors = (RED, '#ffb46e', GOLD)
+        for index, color in enumerate(colors, start=1):
+            if index < phase:
+                fraction = 0.0
+            elif index == phase:
+                fraction = boss.hp / boss.max_hp
+            else:
+                fraction = 1.0
+            bar_y = y + 9 + (index - 1) * 9
+            self.canvas.rect(x, bar_y, width, 7, '#08121b', outline=color)
+            self.bar(x + 2, bar_y + 2, width - 4, 3, fraction, color)
+
     def draw_side(self):
         draw, game = self.canvas, self.game
         draw.rect(*SIDE, PANEL, outline=BORDER)
@@ -218,7 +262,8 @@ class Interface:
         if game.phase == 'prepare' or (game.phase == 'pause' and self.before_pause == 'prepare'):
             self.draw_preparation()
             return
-        left = len(WAVES[game.wave]) - game.spawned + len(game.enemies)
+        waiting_boss = int(game.wave == BOSS_WAVE and not game.boss_spawned)
+        left = len(WAVES[game.wave]) - game.spawned + len(game.enemies) + waiting_boss
         self.label(868, 172, f'第 {game.wave + 1} 波', f'Wave {game.wave + 1}', 28)
         self.label(868, 218, f'剩餘敵人   {left}', f'Enemies remaining   {left}', 17)
         self.label(868, 253, f'已擊倒   {game.kills}', f'Defeated   {game.kills}', 17)
@@ -226,10 +271,11 @@ class Interface:
         self.label(868, 318, f'等級 {game.level}', f'Level {game.level}', 20, GREEN)
         self.text(1111, 319, f'{game.xp} / {game.next_xp} XP', 15, MUTED, 'e')
         self.bar(868, 348, 244, 9, game.xp / game.next_xp, GREEN)
-        self.label(868, 399, '靠近敵人時自動攻擊', 'Attacks trigger near enemies', 16, MUTED)
-        self.label(868, 430, '走到掉落物旁即可拾取', 'Walk over drops to collect them', 16, MUTED)
-        self.label(868, 492, '方向鍵 / WASD 移動', 'Arrow keys / WASD to move', 16)
-        self.label(868, 525, 'Esc 暫停', 'Esc to pause', 16)
+        self.label(868, 399, '自動遠程射擊；近戰需手動', 'Auto ranged; melee is manual', 14, MUTED)
+        self.label(868, 430, 'Space / 點擊：圓形範圍近戰', 'Space / click: circular melee', 15, GOLD)
+        self.label(868, 478, '方向鍵 / WASD 移動', 'Arrow keys / WASD to move', 15)
+        self.label(868, 511, '走近金色、紫色物品撿取', 'Walk over gold / purple drops', 14, MUTED)
+        self.label(868, 544, 'Esc 暫停', 'Esc to pause', 15)
 
     def draw_preparation(self):
         game = self.game
@@ -242,17 +288,17 @@ class Interface:
         self.label(868, 233, f'建造點 {game.selected_pad + 1}   {pad_status}',
                    f'Pad {game.selected_pad + 1}   {pad_status}', 16, BLUE)
         for index, defense in enumerate(DEFENSES):
-            y = 255 + index * 66
+            y = 251 + index * 43
             cost = defense.cost
             zh, en = defense.name
-            self.button(868, y, 246, 36, (f'{index + 1}  {zh}   {cost[0]} 零件 / {cost[1]} 能量',
-                                           f'{index + 1}  {en}   {cost[0]}P / {cost[1]}E'),
-                        lambda kind=index: game.build(kind), defense.color)
-            self.label(878, y + 49, *defense.description, 13, MUTED)
-        self.button(868, 458, 246, 37, ('R  修理禮堂   4 零件', 'R  Repair auditorium   4P'), game.repair)
-        self.button(868, 503, 246, 37, ('U  升級選取的塔   5 零件 / 2 能量', 'U  Upgrade selected tower   5P / 2E'),
-                    game.upgrade_tower)
-        self.button(868, 575, 246, 45, ('Enter  開始下一波', 'Enter  Start next wave'), game.advance_wave, GREEN, True)
+            self.button(868, y, 246, 30, (f'{index + 1}  {zh}   {cost[0]}零件/{cost[1]}能量',
+                                           f'{index + 1}  {en}   {cost[0]}P/{cost[1]}E'),
+                        lambda kind=index: game.build(kind), defense.color, size=13)
+            self.label(878, y + 32, *defense.description, 12, MUTED)
+        self.button(868, 480, 246, 35, ('R  修理禮堂   4 零件', 'R  Repair auditorium   4P'), game.repair, size=13)
+        self.button(868, 523, 246, 35, ('U  升級選取設施   5 零件 / 2 能量', 'U  Upgrade selected defense   5P / 2E'),
+                    game.upgrade_tower, size=13)
+        self.button(868, 585, 246, 43, ('Enter  開始下一波', 'Enter  Start next wave'), game.advance_wave, GREEN, True, size=14)
 
     def overlay(self, x, y, width, height):
         self.buttons.clear()
@@ -262,26 +308,30 @@ class Interface:
     def draw_title(self):
         self.overlay(308, 171, 536, 365)
         self.label(576, 195, '國立清華大學', 'NATIONAL TSING HUA UNIVERSITY', 15, BLUE, 'center')
-        self.canvas.image('title', 328, 213)
+        self.canvas.image('auditorium_title', 456, 204)
         self.label(576, 369, '大禮堂防衛戰', 'Auditorium Defense', 42, TEXT, 'center')
-        self.label(576, 413, '收集資源、配置防禦塔，守住三波敵襲。',
-                   'Collect resources and protect the base for three waves.', 17, MUTED, 'center')
+        self.label(576, 413, '收集資源、配置防禦塔，守住五波敵襲。',
+                   'Collect resources and protect the base for five waves.', 17, MUTED, 'center')
         self.button(378, 438, 190, 48, ('Enter  開始遊戲', 'Enter  Start'), self.start, BLUE, True)
         self.button(584, 438, 190, 48, ('H  操作說明', 'H  Controls'), self.help)
 
     def draw_help(self):
-        self.overlay(289, 168, 574, 382)
-        self.label(326, 217, '操作說明', 'How to play', 30)
+        self.overlay(176, 119, 800, 492)
+        self.label(210, 162, '新手指引與操作說明', 'New player guide', 27)
         rows = (
-            ('方向鍵或 WASD 移動，附近有敵人時自動攻擊。', 'Move with the arrow keys or WASD. Attacks are automatic.'),
-            ('走近零件和能量即可拾取。升級用 1、2、3 三選一。', 'Walk over drops to collect them. Pick an upgrade with 1–3.'),
-            ('波次間按 Tab 選建造點，按 1、2、3 選塔種。', 'Between waves, Tab selects a pad and 1–3 builds a tower.'),
-            ('按 R 修禮堂、按 U 升級塔、按 Enter 開始下一波。', 'R repairs, U upgrades the tower, and Enter starts a wave.'),
-            ('守衛和禮堂都撐過第三波，就能獲勝。', 'Win by keeping the defender and auditorium alive for three waves.'),
+            ('方向鍵 / WASD 移動；自動遠程射擊。Space 或點擊才會手動觸發圓形範圍近戰。', 'Move with arrows / WASD. Ranged shots are automatic; Space or click manually triggers circular melee.'),
+            ('附近敵人會被自動攻擊；金色是零件，紫色是能量，走近即可拾取。', 'Nearby enemies are attacked automatically. Gold is parts; purple is energy.'),
+            ('波次間點擊建造點或按 Tab 選位置，再用 1–5 建造五種設施。', 'Between waves, click a pad or press Tab, then press 1–5 to build.'),
+            ('紅綠燈暈眩群敵；圍牆擋路但會被打壞；小湖淹一隻敵人。', 'Traffic light stuns groups; walls block and break; lakes drown one enemy.'),
+            ('校狗近攻；奶蛋發射器遠攻並波及附近敵人。R 修禮堂，U 升級設施。', 'Dog attacks nearby; egg launcher fires far and splashes. R repairs; U upgrades.'),
+            ('熊耐打近攻；小熊會衝刺；牛來會遠距攻擊。第五波一般敵人清完後出現 Boss。', 'Bear is tough and melee; small bears dash; Niulai attacks at range. The boss follows Wave 5.'),
+            ('Boss 共三階段；每條血條耗盡會從不同入口重進。第 2、3 階段有奶蛋環繞，不會造成傷害。', 'Boss has three stages and re-enters from a new entrance after each bar. Eggs orbit in phases 2–3 without dealing damage.'),
+            ('守住禮堂並擊敗 Boss 獲勝；玩家或禮堂生命歸零則失敗。', 'Defeat the boss while keeping both HP bars above zero to win.'),
         )
         for index, row in enumerate(rows):
-            self.label(326, 270 + index * 36, *row, 16, MUTED)
-        self.button(469, 468, 215, 44, ('Esc  回標題', 'Esc  Back to title'), self.title)
+            self.label(210, 216 + index * 43, *row, 15, MUTED)
+        self.button(365, 548, 200, 42, ('Enter  開始遊戲', 'Enter  Start game'), self.start, BLUE, True)
+        self.button(587, 548, 200, 42, ('Esc  回標題', 'Esc  Back to title'), self.title)
 
     def draw_upgrade(self):
         self.overlay(230, 252, 692, 222)
@@ -298,7 +348,7 @@ class Interface:
         self.overlay(307, 213, 538, 294)
         if victory:
             self.label(576, 271, '防守成功', 'Auditorium secured', 35, GREEN, 'center')
-            self.label(576, 321, '成功守住第三波的最後一名敵人。', 'All three waves defeated.', 17, MUTED, 'center')
+            self.label(576, 321, '成功擊敗最終 Boss 並守住大禮堂。', 'The final boss is defeated; the auditorium is safe.', 17, MUTED, 'center')
         else:
             self.label(576, 271, '防守失敗', 'Defense failed', 35, RED, 'center')
             self.label(576, 321, *game.loss_reason, 17, MUTED, 'center')
@@ -316,12 +366,13 @@ class Interface:
         self.draw_field()
         self.draw_entities()
         self.draw_hud()
+        self.draw_boss_bar()
         self.draw_side()
         if game.notice_left > 0 and game.phase in ('combat', 'prepare'):
             self.label(23, 690, *game.notice, 16, GOLD)
         elif game.phase in ('combat', 'prepare'):
-            self.label(23, 690, '藍圈標記守衛，紅圈和橘圈標記敵人。',
-                       'Blue ring marks the defender. Red and orange rings mark enemies.', 14, MUTED)
+            self.label(23, 690, '藍圈是守衛；敵人外觀表示種類，金圈表示暈眩。',
+                       'Blue ring marks the defender; sprites show enemy types, gold means stunned.', 14, MUTED)
         if game.phase == 'title':
             self.draw_title()
         elif game.phase == 'help':

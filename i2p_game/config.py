@@ -3,98 +3,97 @@
 from dataclasses import dataclass
 
 WIDTH, HEIGHT = 1152, 720
-
-
 FIELD = (20, 108, 812, 555)
-
-
 SIDE = (850, 108, 282, 555)
-
-
 BASE = (425, 379)
-
-
 BASE_RADIUS = 68
+BUILDING_HP = 100
 
-
-PADS = ((284, 374), (567, 374), (425, 516))
-
-
-ENTRANCES = (
-    (86, 178), (758, 583), (752, 172), (94, 591),
-    (425, 142), (800, 371), (425, 628), (54, 371),
+# Eight locations are arranged around the auditorium so each defense type has
+# room to matter without crowding the original three locations.
+PADS = (
+    (284, 374), (567, 374), (425, 516),
+    (337, 260), (513, 260), (337, 498), (513, 498), (425, 235),
 )
 
+# Each entrance extends one pad's straight route toward the field edge.
+ENTRANCES = (
+    (35, 365), (817, 365), (425, 648), (236, 123),
+    (614, 123), (226, 648), (624, 648), (425, 123),
+)
+BOSS_PHASE_ENTRANCES = (ENTRANCES[0], ENTRANCES[1], ENTRANCES[2])
 
 MAX_BASE_HP = 180
-
-
 REPAIR_COST, REPAIR_HP = 4, 38
-
-
 UPGRADE_COST = (5, 2)
-
-
 STARTING_PLAYER_HP = 100
-
+PLAYER_MELEE_RANGE = 78
+PLAYER_MELEE_COOLDOWN = 1.05
+PLAYER_MELEE_FLASH_DURATION = 0.22
+PLAYER_RANGED_RANGE = 153
+PLAYER_RANGED_INTERVAL = 0.37
+BOSS_PHASE_COUNT = 3
+# Every boss phase has 1.5 times the former single-boss HP.
+BOSS_HP_MULTIPLIER = 1.5
+BOSS_EGG_ORBIT_RADIUS = 48
+BOSS_EGG_ORBIT_SPEED = 2.8
 
 BG = '#0c1621'
-
-
 PANEL = '#162534'
-
-
 BORDER = '#2d4558'
-
-
-TEXT = '#edf5fa'
-
-
-MUTED = '#a8bdcd'
-
-
+TEXT = '#ffffff'
+MUTED = '#d3e1eb'
 GREEN = '#8ee5ae'
-
-
 BLUE = '#78d7ff'
-
-
 GOLD = '#ffd181'
-
-
 PURPLE = '#c9b3ff'
-
-
 RED = '#ff8580'
 
 
-@dataclass
+@dataclass(frozen=True)
 class EnemyKind:
+    name: tuple
+    artwork: str
     hp: int
     speed: int
     base_damage: int
     player_damage: int
     radius: int
     color: str
+    attack_interval: float = 0.9
+    attack_range: int = 0
+    ranged: bool = False
+    boss: bool = False
+    dash_interval: float = 0.0
+    dash_duration: float = 0.0
 
 
+# Three ordinary enemy classes use different health, speed, attack timing, and
+# attack style. The fourth entry is reserved for the final-wave boss.
 ENEMY_KINDS = (
-    EnemyKind(48, 51, 6, 9, 14, RED),
-    EnemyKind(29, 84, 4, 7, 10, '#ffac66'),
+    EnemyKind(('熊', 'Bear'), 'bear', 64, 43, 10, 12, 15, RED, 1.0),
+    EnemyKind(('小熊', 'Small bear'), 'small_bear', 32, 92, 5, 7, 11, '#ffac66', 0.68,
+              dash_interval=3.8, dash_duration=0.65),
+    EnemyKind(('牛來', 'Niulai'), 'niulai', 58, 46, 8, 9, 15, PURPLE, 1.2, 118, True),
+    EnemyKind(('最終 Boss', 'Final boss'), 'boss', 1250, 24, 24, 25, 31, RED, 1.15, boss=True),
 )
-
+BOSS_KIND = 3
+BOSS_WAVE = 4
+FIELD2_START_WAVE = 3
 
 WAVES = (
-    (0,) * 8,
-    (0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0),
-    (1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1),
+    (0, 0, 1, 0, 1, 0, 0, 1),
+    (0, 1, 2, 0, 1, 0, 2, 1, 0, 1, 2, 0),
+    (1, 2, 0, 1, 2, 0, 1, 0, 2, 1, 0, 2, 0, 1, 2, 0),
+    (2, 1, 0, 1, 2, 0, 1, 2, 0, 1, 0, 2, 1, 2, 0, 1, 2, 0, 1, 2),
+    (1, 2, 0, 1, 2, 0, 2, 1, 0, 2, 1, 0, 1, 2, 0, 2, 1, 2, 0, 1, 2, 0, 1, 2),
 )
 
+# Longer gaps make each wave last longer and leave more time to react.
+SPAWN_INTERVALS = (1.45, 1.3, 1.18, 1.08, 0.98)
 
-SPAWN_INTERVALS = (1.15, 0.94, 0.77)
 
-
-@dataclass
+@dataclass(frozen=True)
 class DefenseKind:
     name: tuple
     description: tuple
@@ -103,20 +102,28 @@ class DefenseKind:
     damage: int
     interval: float
     color: str
+    artwork: str
+    mode: str
+    durability: int = 0
+    stun_duration: float = 0.0
+    splash_radius: int = 0
 
 
 DEFENSES = (
-    DefenseKind(('哨戒塔', 'Sentry'), ('快速攻擊單一敵人', 'Rapid single-target shots'),
-                (5, 2), 185, 18, 0.55, GOLD),
-    DefenseKind(('冰霜塔', 'Frost tower'), ('傷害並減緩敵人', 'Damages and slows enemies'),
-                (5, 3), 170, 12, 0.62, BLUE),
-    DefenseKind(('脈衝塔', 'Pulse tower'), ('同時打擊附近敵群', 'Hits groups near the target'),
-                (7, 3), 171, 22, 0.90, PURPLE),
+    DefenseKind(('紅綠燈', 'Traffic light'), ('大範圍暫停敵人', 'Stuns groups of enemies'),
+                (6, 3), 220, 0, 6.0, GREEN, 'traffic_light', 'stun', stun_duration=1.7),
+    DefenseKind(('施工圍牆', 'Construction wall'), ('便宜、脆弱，可阻擋路線', 'Cheap, fragile path blocker'),
+                (2, 0), 0, 0, 0.0, MUTED, 'wall', 'wall', durability=88),
+    DefenseKind(('小湖', 'Small lake'), ('淹沒單一敵人，冷卻較久', 'Drowns one enemy; long cooldown'),
+                (5, 2), 66, 0, 6.5, BLUE, 'lake', 'trap'),
+    DefenseKind(('校狗', 'Campus dog'), ('近距離快速攻擊', 'Fast close-range attack'),
+                (6, 2), 98, 22, 0.72, GOLD, 'dog', 'shot'),
+    DefenseKind(('奶蛋發射器', 'Egg launcher'), ('遠程蛋彈，可波及附近敵人', 'Long-range egg with splash damage'),
+                (8, 4), 300, 34, 1.25, PURPLE, 'egg_launcher', 'egg', splash_radius=38),
 )
 
-
 UPGRADES = (
-    (('攻擊強化', 'Power'), ('每次攻擊傷害 +8', 'Attack damage +8'), GOLD),
+    (('攻擊強化', 'Power'), ('玩家攻擊傷害 +8', 'Player damage +8'), GOLD),
     (('生命強化', 'Vitality'), ('最大生命與目前生命 +25', 'Maximum and current HP +25'), GREEN),
     (('移動強化', 'Agility'), ('移動速度 +30', 'Movement speed +30'), BLUE),
 )

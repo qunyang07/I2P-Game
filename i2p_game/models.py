@@ -12,6 +12,10 @@ class Enemy:
     max_hp: int
     base_wait: float = 0.0
     slowed: float = 0.0
+    stunned: float = 0.0
+    wall_wait: float = 0.0
+    dash_wait: float = 0.0
+    dash_left: float = 0.0
 
 
 @dataclass
@@ -19,6 +23,9 @@ class Tower:
     kind: int
     upgraded: bool = False
     wait: float = 0.0
+    hp: int = 0
+    max_hp: int = 0
+    effect: float = 0.0
 
 
 @dataclass
@@ -34,6 +41,14 @@ class Shot:
     target: tuple
     color: str
     remaining: float = 0.12
+    artwork: str | None = None
+
+
+@dataclass
+class BossEgg:
+    angle: float
+    x: float = 0.0
+    y: float = 0.0
 
 
 @dataclass
