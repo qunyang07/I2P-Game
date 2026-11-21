@@ -1,19 +1,19 @@
 """Wave progression, combat, economy, and upgrade rules."""
 
 import random
-from math import cos, hypot, pi, sin
+from math import hypot
 
 from .config import (
-    BASE, BASE_RADIUS, BLUE, BOSS_EGG_ORBIT_RADIUS, BOSS_EGG_ORBIT_SPEED,
-    BOSS_HP_MULTIPLIER, BOSS_KIND, BOSS_PHASE_COUNT, BOSS_PHASE_ENTRANCES,
-    BOSS_WAVE, BUILDING_HP, DEFENSES, ENEMY_KINDS, ENTRANCES, FIELD,
-    MAX_BASE_HP, PADS, PLAYER_MELEE_COOLDOWN,
+    ALL_PADS, BASE, BASE_RADIUS, BLUE, BOSS_ENTRANCE, BOSS_KIND, BOSS_PHASE_COUNT,
+    BOSS_WAVE, DEFENSES, EGG_PROJECTILE_SPEED, ENEMY_KINDS, ENTRANCES,
+    FIELD, HARD_PAD_COSTS, HARD_SPAWN_INTERVALS, HARD_WAVES, MAX_BASE_HP,
+    PADS, PLAYER_MELEE_COOLDOWN,
     PLAYER_MELEE_FLASH_DURATION, PLAYER_MELEE_RANGE, PLAYER_RANGED_INTERVAL,
     PLAYER_RANGED_RANGE, REPAIR_COST, REPAIR_HP, SPAWN_INTERVALS,
-    STARTING_PLAYER_HP, UPGRADE_COST, WAVES,
+    STARTING_PLAYER_HP, UPGRADE_COSTS, WAVES,
 )
 from .geometry import distance
-from .models import BossEgg, Drop, Enemy, Shot, Tower
+from .models import Drop, Enemy, Projectile, Shot, Tower
 
 
 class Game:
@@ -21,19 +21,23 @@ class Game:
         self.reset()
         self.phase = 'title'
 
-    def reset(self):
+    def reset(self, difficulty='normal'):
+        self.difficulty = difficulty
+        self.waves = HARD_WAVES if difficulty == 'hard' else WAVES
+        self.spawn_intervals = HARD_SPAWN_INTERVALS if difficulty == 'hard' else SPAWN_INTERVALS
         self.phase = 'combat'
         self.wave = 0
         self.spawned = 0
         self.rng = random.Random()
-        self.wave_queue = list(WAVES[self.wave])
+        self.wave_queue = list(self.waves[self.wave])
         self.rng.shuffle(self.wave_queue)
         self.route_queue = list(ENTRANCES)
         self.rng.shuffle(self.route_queue)
         self.spawn_wait = 0.75
         self.boss_spawned = False
+        self.boss_encounters = 0
+        self.boss_preparation = False
         self.boss_phase = 0
-        self.boss_eggs = []
         self.player_x, self.player_y = 425.0, 467.0
         self.player_hp = self.max_player_hp = STARTING_PLAYER_HP
         self.base_hp = MAX_BASE_HP
@@ -41,31 +45,58 @@ class Game:
         self.attack_wait = self.hurt_wait = 0.0
         self.melee_wait = self.melee_flash = 0.0
         self.parts = self.energy = self.kills = self.xp = 0
-        self.level, self.next_xp = 1, 5
+        self.level, self.next_xp = 1, 100
         self.elapsed = 0.0
         self.selected_pad = 0
         self.enemies = []
+        self.projectiles = []
         self.drops = []
         self.shots = []
-        self.towers = [None] * len(PADS)
+        self.towers = [None] * len(ALL_PADS)
+        self.unlocked_pads = [True] * len(PADS) + [difficulty != 'hard'] * len(HARD_PAD_COSTS)
         self.notice = ('', '')
         self.notice_left = 0.0
         self.loss_reason = ('', '')
+        self.tutorial_active = False
+        self.tutorial_moved = False
+        self.tutorial_hit = False
+
+    def begin_tutorial(self):
+        """Set up a safe, hands-on practice round before the real game."""
+        self.reset()
+        self.tutorial_active = True
+
+    def spawn_tutorial_target(self):
+        """Place a stationary, low-health target within melee range."""
+        if not self.enemies:
+            x, y = self.player_x + 54, self.player_y
+            self.enemies.append(Enemy(0, x, y, 32, 32))
 
     def message(self, chinese, english):
         self.notice = chinese, english
         self.notice_left = 2.6
 
     def advance_wave(self):
-        if self.phase == 'prepare' and self.wave + 1 < len(WAVES):
+        if self.phase != 'prepare':
+            return
+        self.projectiles.clear()
+        if self.boss_preparation:
+            self.boss_preparation = False
+            self.phase = 'combat'
+            self.notice_left = 0.0
+            self.spawn_boss()
+            return
+        if self.wave + 1 < len(self.waves):
             self.wave += 1
             self.spawned = 0
-            self.wave_queue = list(WAVES[self.wave])
+            self.wave_queue = list(self.waves[self.wave])
             self.rng.shuffle(self.wave_queue)
             self.route_queue = list(ENTRANCES)
             self.rng.shuffle(self.route_queue)
             self.spawn_wait = 0.75
             self.boss_spawned = False
+            self.boss_preparation = False
+            self.boss_phase = 0
             self.phase = 'combat'
             self.notice_left = 0.0
 
@@ -94,16 +125,31 @@ class Game:
     def build(self, kind):
         if self.phase != 'prepare' or not 0 <= kind < len(DEFENSES):
             return
+        if not self.unlocked_pads[self.selected_pad]:
+            self.unlock_pad(self.selected_pad)
+            return
         if self.towers[self.selected_pad] is not None:
             self.message('這個建造點已有防禦設施', 'This pad is already occupied')
             return
         defense = DEFENSES[kind]
         if self.spend(defense.cost):
-            max_hp = defense.durability or BUILDING_HP
             self.towers[self.selected_pad] = Tower(
-                kind, hp=max_hp, max_hp=max_hp
+                kind, hp=defense.durability, max_hp=defense.durability
             )
             self.message(f'已建造{defense.name[0]}', f'{defense.name[1]} built')
+
+    def unlock_pad(self, index):
+        if (self.phase != 'prepare' or self.difficulty != 'hard'
+                or index < len(PADS) or index >= len(ALL_PADS)):
+            return
+        if self.unlocked_pads[index]:
+            self.message('這個建造點已解鎖', 'This pad is already unlocked')
+            return
+        cost = HARD_PAD_COSTS[index - len(PADS)]
+        if self.spend(cost):
+            self.unlocked_pads[index] = True
+            self.selected_pad = index
+            self.message('額外建造點已解鎖', 'Extra defense slot unlocked')
 
     def upgrade_tower(self):
         if self.phase != 'prepare':
@@ -111,12 +157,12 @@ class Game:
         tower = self.towers[self.selected_pad]
         if tower is None:
             self.message('請先在這裡建造防禦設施', 'Build a defense on this pad first')
-        elif tower.upgraded:
+        elif tower.upgrade_level >= 3:
             self.message('這個設施已達最高等級', 'This defense is fully upgraded')
-        elif self.spend(UPGRADE_COST):
-            tower.upgraded = True
+        elif self.spend(UPGRADE_COSTS[tower.upgrade_level - 1]):
+            tower.upgrade_level += 1
             if DEFENSES[tower.kind].mode == 'wall':
-                tower.max_hp += 44
+                tower.max_hp += 44 if tower.upgrade_level == 2 else 60
                 tower.hp = tower.max_hp
             self.message('設施效果已提升', 'Defense upgraded')
 
@@ -125,7 +171,7 @@ class Game:
             return
         self.xp -= self.next_xp
         self.level += 1
-        self.next_xp += 3
+        self.next_xp = 100 + (self.level - 1) * 60
         if choice == 0:
             self.damage += 8
         elif choice == 1:
@@ -134,7 +180,7 @@ class Game:
         else:
             self.player_speed += 30
         if self.xp < self.next_xp:
-            self.phase = 'combat'
+            self.phase = 'prepare' if self.boss_preparation else 'combat'
 
     def manual_attack(self):
         """Damage every enemy in the defender's circular melee radius."""
@@ -155,11 +201,15 @@ class Game:
             hit_count += 1
         if hit_count:
             self.message('近戰命中敵人', 'Melee strike hit')
+            if self.tutorial_active:
+                self.tutorial_hit = True
         return True
 
     def move_player(self, dx, dy, dt):
         length = hypot(dx, dy)
         if length:
+            if self.tutorial_active:
+                self.tutorial_moved = True
             self.player_x += self.player_speed * dx / length * dt
             self.player_y += self.player_speed * dy / length * dt
         left, top, width, height = FIELD
@@ -182,65 +232,80 @@ class Game:
         kind_index = self.wave_queue[self.spawned]
         kind = ENEMY_KINDS[kind_index]
         x, y = self.route_queue[self.spawned % len(self.route_queue)]
-        hp = kind.hp + 6 * self.wave
+        hard_hp = 1.35 if self.difficulty == 'hard' else 1.0
+        hp = round((kind.hp + 6 * self.wave) * hard_hp)
         self.enemies.append(Enemy(kind_index, x, y, hp, hp, dash_wait=kind.dash_interval))
         self.spawned += 1
 
     def spawn_boss(self):
-        x, y = BOSS_PHASE_ENTRANCES[0]
-        hp = self.boss_phase_hp()
+        kind = ENEMY_KINDS[BOSS_KIND]
+        x, _ = BOSS_ENTRANCE
+        top = FIELD[1] + kind.radius
+        bottom = FIELD[1] + FIELD[3] - kind.radius
+        y = self.rng.uniform(top, bottom)
+        hp = kind.hp + 120 * self.wave
+        if self.difficulty == 'hard':
+            hp = round(hp * (1.35 if self.boss_encounters == 0 else 1.7))
+        self.boss_phase = 0
+        self.boss_preparation = False
         self.enemies.append(Enemy(BOSS_KIND, x, y, hp, hp))
         self.boss_spawned = True
-        self.boss_phase = 1
-        self.boss_eggs = []
-        self.message('最終 Boss 出現！', 'The final boss has arrived!')
-
-    def boss_phase_hp(self):
-        kind = ENEMY_KINDS[BOSS_KIND]
-        original_phase_hp = kind.hp + 120 * self.wave
-        return max(1, round(original_phase_hp * BOSS_HP_MULTIPLIER))
-
-    def begin_boss_egg_orbit(self, boss):
-        first_angle = self.rng.uniform(0, 2 * pi)
-        self.boss_eggs = []
-        for index in range(3):
-            egg = BossEgg(first_angle + index * 2 * pi / 3)
-            self.position_boss_egg(egg, boss)
-            self.boss_eggs.append(egg)
-
-    def position_boss_egg(self, egg, boss):
-        egg.x = boss.x + cos(egg.angle) * BOSS_EGG_ORBIT_RADIUS
-        egg.y = boss.y + sin(egg.angle) * BOSS_EGG_ORBIT_RADIUS
+        self.boss_encounters += 1
+        for tower in self.towers:
+            if tower:
+                tower.locked = False
+        encounter = self.boss_encounters
+        if self.difficulty == 'hard':
+            self.message(f'困難模式第 {encounter} 場 Boss 出現！',
+                         f'Hard mode boss encounter {encounter} has arrived!')
+        else:
+            self.message('最終 Boss 出現！', 'The final boss has arrived!')
 
     def advance_boss_phase(self):
-        boss = next((enemy for enemy in self.enemies
-                     if ENEMY_KINDS[enemy.kind].boss and enemy.hp <= 0), None)
-        if boss is None or self.boss_phase >= BOSS_PHASE_COUNT:
+        """Respawn a defeated boss phase from alternating field edges."""
+        locked_count = 0
+        for index, enemy in enumerate(self.enemies):
+            if enemy.kind != BOSS_KIND or enemy.hp > 0:
+                continue
+            if self.boss_phase + 1 >= BOSS_PHASE_COUNT:
+                for tower in self.towers:
+                    if tower:
+                        tower.locked = False
+                return
+
+            if self.difficulty == 'hard':
+                lock_count = 1 if self.boss_phase == 0 else 2
+                eligible = [tower for tower in self.towers
+                            if tower is not None and not tower.locked]
+                self.rng.shuffle(eligible)
+                selected = eligible[:lock_count]
+                for tower in selected:
+                    tower.locked = True
+                locked_count = len(selected)
+
+            self.boss_phase += 1
+            entrance_index = 1 if self.boss_phase % 2 else 0
+            x, _ = ENTRANCES[entrance_index]
+            kind = ENEMY_KINDS[BOSS_KIND]
+            top = FIELD[1] + kind.radius
+            bottom = FIELD[1] + FIELD[3] - kind.radius
+            y = self.rng.uniform(top, bottom)
+            hp = kind.hp + 120 * self.wave
+            if self.difficulty == 'hard':
+                hp = round(hp * (1.35 if self.boss_encounters == 1 else 1.7))
+            self.enemies[index] = Enemy(BOSS_KIND, x, y, hp, hp)
+            phase_number = self.boss_phase + 1
+            if self.difficulty == 'hard':
+                self.message(
+                    f'Boss 第 {phase_number} 條血量！隨機鎖定 {locked_count} 座防禦塔！',
+                    f'Boss phase {phase_number}! {locked_count} random defense tower(s) locked!',
+                )
+            else:
+                self.message(
+                    f'Boss 第 {phase_number} 條血量！從另一側出現！',
+                    f'Boss phase {phase_number}! It has returned from the other side!',
+                )
             return
-
-        self.boss_phase += 1
-        boss.x, boss.y = BOSS_PHASE_ENTRANCES[self.boss_phase - 1]
-        boss.hp = boss.max_hp = self.boss_phase_hp()
-        boss.base_wait = boss.slowed = boss.stunned = 0.0
-        boss.wall_wait = boss.dash_wait = boss.dash_left = 0.0
-        self.boss_eggs.clear()
-        if self.boss_phase >= 2:
-            self.begin_boss_egg_orbit(boss)
-        self.message(
-            f'最終 Boss 進入第 {self.boss_phase} 階段，從新入口再次進場！',
-            f'Final boss phase {self.boss_phase}: re-entering from a new entrance!',
-        )
-
-    def update_boss_eggs(self, dt):
-        boss = next((enemy for enemy in self.enemies
-                     if ENEMY_KINDS[enemy.kind].boss and enemy.hp > 0), None)
-        if boss is None or self.boss_phase < 2:
-            self.boss_eggs.clear()
-            return
-
-        for egg in self.boss_eggs:
-            egg.angle = (egg.angle + BOSS_EGG_ORBIT_SPEED * dt) % (2 * pi)
-            self.position_boss_egg(egg, boss)
 
     def wall_on_route(self, enemy, kind, dx, dy, length):
         """Return the first wall intersecting an enemy's straight route to base."""
@@ -251,9 +316,11 @@ class Game:
         nearest_projection = 1.0
         blocking_radius = kind.radius + 24
         for index, tower in enumerate(self.towers):
-            if tower is None or DEFENSES[tower.kind].mode != 'wall':
+            if not self.unlocked_pads[index]:
                 continue
-            wall_x, wall_y = PADS[index]
+            if tower is None or tower.locked or DEFENSES[tower.kind].mode != 'wall':
+                continue
+            wall_x, wall_y = ALL_PADS[index]
             projection = (
                 (wall_x - enemy.x) * dx + (wall_y - enemy.y) * dy
             ) / squared_length
@@ -269,6 +336,8 @@ class Game:
 
     def enemy_speed(self, enemy, kind):
         speed = kind.speed * (1 + 0.08 * self.wave)
+        if self.difficulty == 'hard':
+            speed *= 1.2
         if enemy.slowed:
             speed *= 0.54
         if enemy.dash_left > 0:
@@ -288,6 +357,24 @@ class Game:
                 enemy.stunned = max(0.0, enemy.stunned - dt)
                 continue
 
+            if kind.targets_player:
+                dx, dy = self.player_x - enemy.x, self.player_y - enemy.y
+                length = hypot(dx, dy)
+                attack_distance = kind.radius + 15
+                if length > attack_distance:
+                    speed = self.enemy_speed(enemy, kind)
+                    travel = min(length - attack_distance, speed * dt)
+                    enemy.x += dx * travel / length
+                    enemy.y += dy * travel / length
+                else:
+                    enemy.base_wait -= dt
+                    if enemy.base_wait <= 0 and self.hurt_wait <= 0:
+                        damage = round(kind.player_damage * (1.25 if self.difficulty == 'hard' else 1))
+                        self.player_hp = max(0, self.player_hp - damage)
+                        self.hurt_wait = 0.62
+                        enemy.base_wait = kind.attack_interval * (0.8 if self.difficulty == 'hard' else 1)
+                continue
+
             dx, dy = BASE[0] - enemy.x, BASE[1] - enemy.y
             length = hypot(dx, dy)
             if length <= 0:
@@ -303,8 +390,9 @@ class Game:
                     if enemy.wall_wait <= 0:
                         tower = self.towers[wall_index]
                         if tower is not None:
-                            tower.hp = max(0, tower.hp - kind.base_damage)
-                            enemy.wall_wait = max(0.45, kind.attack_interval)
+                            damage = round(kind.base_damage * (1.25 if self.difficulty == 'hard' else 1))
+                            tower.hp = max(0, tower.hp - damage)
+                            enemy.wall_wait = max(0.45, kind.attack_interval * (0.8 if self.difficulty == 'hard' else 1))
                             if tower.hp == 0:
                                 self.towers[wall_index] = None
                 else:
@@ -320,17 +408,27 @@ class Game:
             else:
                 enemy.base_wait -= dt
                 if enemy.base_wait <= 0:
-                    self.base_hp = max(0, self.base_hp - kind.base_damage)
-                    enemy.base_wait = kind.attack_interval
+                    enemy.base_wait = kind.attack_interval * (0.8 if self.difficulty == 'hard' else 1)
                     if kind.ranged:
-                        self.shots.append(Shot((enemy.x, enemy.y), BASE, kind.color))
+                        dx, dy = BASE[0] - enemy.x, BASE[1] - enemy.y
+                        length = max(1.0, hypot(dx, dy))
+                        self.projectiles.append(Projectile(
+                            enemy.x, enemy.y, dx / length * 350, dy / length * 350,
+                            round(kind.base_damage * (1.25 if self.difficulty == 'hard' else 1)),
+                            0, 0, radius=7, artwork=None, target_type='base', color=kind.color,
+                        ))
+                    else:
+                        damage = round(kind.base_damage * (1.25 if self.difficulty == 'hard' else 1))
+                        self.base_hp = max(0, self.base_hp - damage)
 
             if (enemy.stunned <= 0 and self.hurt_wait <= 0
                     and distance(enemy.x, enemy.y, self.player_x, self.player_y) < kind.radius + 13):
-                self.player_hp = max(0, self.player_hp - kind.player_damage)
+                damage = round(kind.player_damage * (1.25 if self.difficulty == 'hard' else 1))
+                self.player_hp = max(0, self.player_hp - damage)
                 self.hurt_wait = 0.62
 
-    def target_at(self, x, y, reach, include_enemy_radius=False):
+    def nearest_target_at(self, x, y, reach, include_enemy_radius=False):
+        """Return the living in-range enemy closest to the firing point."""
         nearest = None
         nearest_gap = float('inf')
         for enemy in self.enemies:
@@ -344,19 +442,22 @@ class Game:
     def attack(self, dt):
         self.attack_wait -= dt
         if self.attack_wait <= 0:
-            target = self.target_at(
+            target = self.nearest_target_at(
                 self.player_x, self.player_y, PLAYER_RANGED_RANGE,
                 include_enemy_radius=True,
             )
             if target is not None:
-                target.hp -= self.damage
-                self.shots.append(Shot(
-                    (self.player_x, self.player_y), (target.x, target.y), BLUE
+                dx, dy = target.x - self.player_x, target.y - self.player_y
+                length = max(1.0, hypot(dx, dy))
+                self.projectiles.append(Projectile(
+                    self.player_x, self.player_y, dx / length * 600, dy / length * 600,
+                    self.damage, 0, 0, radius=7, artwork=None,
+                    target_type='enemies', color=BLUE,
                 ))
                 self.attack_wait = PLAYER_RANGED_INTERVAL
 
-        for pad, tower in zip(PADS, self.towers):
-            if tower is None:
+        for index, (pad, tower) in enumerate(zip(ALL_PADS, self.towers)):
+            if tower is None or tower.locked or not self.unlocked_pads[index]:
                 continue
             defense = DEFENSES[tower.kind]
             tower.wait = max(0.0, tower.wait - dt)
@@ -365,7 +466,8 @@ class Game:
             if defense.mode == 'wall' or tower.wait > 0:
                 continue
 
-            reach = defense.reach + (22 if tower.upgraded else 0)
+            level = tower.upgrade_level
+            reach = defense.reach + (22 if level >= 2 else 0) + (18 if level >= 3 else 0)
             if defense.mode == 'stun':
                 targets = [
                     enemy for enemy in self.enemies
@@ -373,40 +475,107 @@ class Game:
                 ]
                 if not targets:
                     continue
-                duration = defense.stun_duration + (0.7 if tower.upgraded else 0)
+                duration = defense.stun_duration + (0.7 if level >= 2 else 0) + (0.8 if level >= 3 else 0)
                 for enemy in targets:
                     enemy.stunned = max(enemy.stunned, duration)
-                tower.wait = defense.interval * (0.8 if tower.upgraded else 1)
+                tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
                 tower.effect = 0.42
                 continue
 
-            target = self.target_at(*pad, reach)
+            target = self.nearest_target_at(*pad, reach)
             if target is None:
+                continue
+
+            if defense.mode == 'egg':
+                dx, dy = target.x - pad[0], target.y - pad[1]
+                length = hypot(dx, dy)
+                if length:
+                    vx = dx / length * EGG_PROJECTILE_SPEED
+                    vy = dy / length * EGG_PROJECTILE_SPEED
+                else:
+                    vx = vy = 0.0
+                damage = (defense.damage * 2 if level >= 3 else
+                          defense.damage * 3 // 2 if level == 2 else defense.damage)
+                splash = defense.splash_radius + (12 if level >= 2 else 0) + (10 if level >= 3 else 0)
+                self.projectiles.append(Projectile(
+                    pad[0], pad[1], vx, vy, damage, damage // 2, splash,
+                ))
+                tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
                 continue
 
             if defense.mode == 'trap':
                 if ENEMY_KINDS[target.kind].boss:
-                    target.hp -= 240 if tower.upgraded else 180
+                    target.hp -= 180 if level == 1 else 240 if level == 2 else 320
                 else:
                     target.hp = 0
-                tower.wait = defense.interval * (0.8 if tower.upgraded else 1)
+                tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
                 tower.effect = 0.5
                 self.shots.append(Shot(pad, (target.x, target.y), defense.color))
                 continue
 
-            damage = defense.damage * 3 // 2 if tower.upgraded else defense.damage
+            damage = (defense.damage * 2 if level >= 3 else
+                      defense.damage * 3 // 2 if level == 2 else defense.damage)
             target.hp -= damage
-            if defense.mode == 'egg':
-                splash = defense.splash_radius + (12 if tower.upgraded else 0)
-                for enemy in self.enemies:
-                    if enemy is not target and enemy.hp > 0 and distance(
-                        enemy.x, enemy.y, target.x, target.y
-                    ) <= splash:
-                        enemy.hp -= damage // 2
-                self.shots.append(Shot(pad, (target.x, target.y), defense.color, artwork='egg'))
+            self.shots.append(Shot(pad, (target.x, target.y), defense.color))
+            tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
+
+    def update_projectiles(self, dt):
+        """Move straight shots and apply damage only when their path collides."""
+        remaining = []
+        for projectile in self.projectiles:
+            start_x, start_y = projectile.x, projectile.y
+            end_x = start_x + projectile.vx * dt
+            end_y = start_y + projectile.vy * dt
+            dx, dy = end_x - start_x, end_y - start_y
+            segment_length_squared = dx * dx + dy * dy
+            def segment_hit(cx, cy, radius):
+                if segment_length_squared:
+                    t = max(0.0, min(1.0, ((cx - start_x) * dx + (cy - start_y) * dy)
+                                          / segment_length_squared))
+                else:
+                    t = 0.0
+                px, py = start_x + t * dx, start_y + t * dy
+                return t, distance(px, py, cx, cy) <= radius + projectile.radius
+
+            if projectile.target_type == 'base':
+                t, hit = segment_hit(*BASE, BASE_RADIUS)
+                if hit:
+                    self.base_hp = max(0, self.base_hp - projectile.damage)
+                    continue
+            elif projectile.target_type == 'player':
+                t, hit = segment_hit(self.player_x, self.player_y, 16)
+                if hit:
+                    if self.hurt_wait <= 0:
+                        self.player_hp = max(0, self.player_hp - projectile.damage)
+                        self.hurt_wait = 0.62
+                    continue
             else:
-                self.shots.append(Shot(pad, (target.x, target.y), defense.color))
-            tower.wait = defense.interval
+                first_hit = None
+                first_hit_t = 2.0
+                for enemy in self.enemies:
+                    if enemy.hp <= 0:
+                        continue
+                    t, hit = segment_hit(enemy.x, enemy.y, ENEMY_KINDS[enemy.kind].radius)
+                    if hit and t < first_hit_t:
+                        first_hit, first_hit_t = enemy, t
+                if first_hit is not None:
+                    impact_x, impact_y = start_x + first_hit_t * dx, start_y + first_hit_t * dy
+                    first_hit.hp -= projectile.damage
+                    if projectile.splash_radius:
+                        for enemy in self.enemies:
+                            if enemy is not first_hit and enemy.hp > 0 and distance(
+                                enemy.x, enemy.y, impact_x, impact_y
+                            ) <= projectile.splash_radius:
+                                enemy.hp -= projectile.splash_damage
+                    continue
+
+            projectile.x, projectile.y = end_x, end_y
+            field_left, field_top, field_width, field_height = FIELD
+            if (field_left + projectile.radius <= end_x <= field_left + field_width - projectile.radius
+                    and field_top + projectile.radius <= end_y <= field_top + field_height - projectile.radius):
+                remaining.append(projectile)
+
+        self.projectiles = remaining
 
     def remove_defeated(self):
         survivors = []
@@ -415,13 +584,22 @@ class Game:
                 survivors.append(enemy)
                 continue
             self.kills += 1
-            self.xp += 3 if ENEMY_KINDS[enemy.kind].boss else 1
-            self.drops.append(Drop(enemy.x - 8, enemy.y))
-            if self.kills % 2 == 0 or ENEMY_KINDS[enemy.kind].boss:
+            xp_gain = ENEMY_KINDS[enemy.kind].xp_reward
+            if self.difficulty == 'hard':
+                xp_gain = round(xp_gain * 1.5)
+            self.xp += xp_gain
+            if self.difficulty == 'hard':
+                self.drops.extend((Drop(enemy.x - 9, enemy.y), Drop(enemy.x + 9, enemy.y)))
+                self.drops.append(Drop(enemy.x, enemy.y - 9, energy=True))
+            else:
+                self.drops.append(Drop(enemy.x - 8, enemy.y))
+            if self.difficulty != 'hard' and (self.kills % 2 == 0 or ENEMY_KINDS[enemy.kind].boss):
                 self.drops.append(Drop(enemy.x + 8, enemy.y, energy=True))
         self.enemies = survivors
 
-    def update(self, dt, dx, dy):
+    def update(self, dt, dx, dy, time_scale=1.0):
+        """Advance all movement, attacks, and cooldowns on scaled game time."""
+        dt *= time_scale
         if self.phase not in ('combat', 'prepare'):
             return
         self.notice_left = max(0.0, self.notice_left - dt)
@@ -432,18 +610,24 @@ class Game:
         for shot in self.shots:
             shot.remaining -= dt
         self.shots = [shot for shot in self.shots if shot.remaining > 0]
+        if self.tutorial_active:
+            if self.phase == 'combat':
+                self.remove_defeated()
+                self.collect_drops()
+            return
         if self.phase == 'prepare':
+            self.update_projectiles(dt)
             return
 
         self.elapsed += dt
         self.hurt_wait = max(0.0, self.hurt_wait - dt)
         self.spawn_wait -= dt
-        if self.spawn_wait <= 0 and self.spawned < len(WAVES[self.wave]):
+        if self.spawn_wait <= 0 and self.spawned < len(self.waves[self.wave]):
             self.spawn_enemy()
-            self.spawn_wait = SPAWN_INTERVALS[self.wave] * self.rng.uniform(0.85, 1.15)
+            interval = self.spawn_intervals[self.wave]
+            self.spawn_wait = interval * self.rng.uniform(0.85, 1.15)
 
         self.move_enemies(dt)
-        self.update_boss_eggs(dt)
         if self.player_hp == 0 or self.base_hp == 0:
             self.phase = 'loss'
             self.loss_reason = ('禮堂耐久已歸零', 'The auditorium fell') if self.base_hp == 0 else (
@@ -451,21 +635,32 @@ class Game:
             return
 
         self.attack(dt)
+        self.update_projectiles(dt)
         self.advance_boss_phase()
         self.remove_defeated()
         self.collect_drops()
 
-        # The boss arrives only after the regular enemies of the final wave
-        # have been cleared, so the wave cannot finish before the boss fight.
-        if (self.wave == BOSS_WAVE and self.spawned == len(WAVES[self.wave])
-                and not self.enemies and not self.boss_spawned):
-            self.spawn_boss()
+        # Pause after boss-gate waves so the player can prepare for the boss.
+        boss_due = (
+            (self.wave == BOSS_WAVE and self.boss_encounters == 0)
+            or (self.difficulty == 'hard' and self.wave == len(self.waves) - 1
+                and self.boss_encounters == 1)
+        )
+        if (boss_due and self.spawned == len(self.waves[self.wave])
+                and not self.enemies and not self.boss_preparation):
+            self.boss_preparation = True
+            self.phase = 'prepare'
+            self.message(f'第 {self.wave + 1} 波敵人已清除，可建塔或升級後再迎戰 Boss',
+                         f'Wave {self.wave + 1} cleared. Prepare for the boss.')
 
         if self.xp >= self.next_xp:
             self.phase = 'upgrade'
-        elif self.spawned == len(WAVES[self.wave]) and not self.enemies:
-            if self.wave == len(WAVES) - 1 and self.boss_spawned:
+        elif self.boss_preparation:
+            self.phase = 'prepare'
+        elif self.spawned == len(self.waves[self.wave]) and not self.enemies:
+            if (self.wave == len(self.waves) - 1 and self.boss_spawned
+                    and (self.difficulty != 'hard' or self.boss_encounters >= 2)):
                 self.phase = 'win'
-            elif self.wave < len(WAVES) - 1:
+            elif self.wave < len(self.waves) - 1:
                 self.phase = 'prepare'
                 self.message('可以拾取資源，再決定如何備戰', 'Collect resources, then prepare for the next wave')

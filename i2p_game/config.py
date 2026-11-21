@@ -3,40 +3,43 @@
 from dataclasses import dataclass
 
 WIDTH, HEIGHT = 1152, 720
+# Pygame draws internally at this multiple, then smoothly downsamples to the
+# normal window for cleaner text, shapes, and scaled artwork.
+RENDER_SCALE = 2
+MIN_WINDOW_SCALE = 1.0
+MAX_WINDOW_SCALE = 1.5
 FIELD = (20, 108, 812, 555)
 SIDE = (850, 108, 282, 555)
 BASE = (425, 379)
 BASE_RADIUS = 68
-BUILDING_HP = 100
 
-# Eight locations are arranged around the auditorium so each defense type has
-# room to matter without crowding the original three locations.
+# Numbered clockwise from the north slot.
 PADS = (
-    (284, 374), (567, 374), (425, 516),
-    (337, 260), (513, 260), (337, 498), (513, 498), (425, 235),
+    (425, 235), (513, 260), (567, 374), (513, 498),
+    (425, 516), (337, 498), (284, 374), (337, 260),
 )
+HARD_EXTRA_PADS = ((425, 168), (425, 585))
+ALL_PADS = PADS + HARD_EXTRA_PADS
+HARD_PAD_COSTS = ((12, 6), (18, 10))
 
 # Each entrance extends one pad's straight route toward the field edge.
 ENTRANCES = (
     (35, 365), (817, 365), (425, 648), (236, 123),
     (614, 123), (226, 648), (624, 648), (425, 123),
 )
-BOSS_PHASE_ENTRANCES = (ENTRANCES[0], ENTRANCES[1], ENTRANCES[2])
+BOSS_ENTRANCE = ENTRANCES[0]
 
 MAX_BASE_HP = 180
 REPAIR_COST, REPAIR_HP = 4, 38
 UPGRADE_COST = (5, 2)
+UPGRADE_COSTS = (UPGRADE_COST, (8, 4))
 STARTING_PLAYER_HP = 100
 PLAYER_MELEE_RANGE = 78
 PLAYER_MELEE_COOLDOWN = 1.05
 PLAYER_MELEE_FLASH_DURATION = 0.22
 PLAYER_RANGED_RANGE = 153
 PLAYER_RANGED_INTERVAL = 0.37
-BOSS_PHASE_COUNT = 3
-# Every boss phase has 1.5 times the former single-boss HP.
-BOSS_HP_MULTIPLIER = 1.5
-BOSS_EGG_ORBIT_RADIUS = 48
-BOSS_EGG_ORBIT_SPEED = 2.8
+EGG_PROJECTILE_SPEED = 420
 
 BG = '#0c1621'
 PANEL = '#162534'
@@ -66,31 +69,47 @@ class EnemyKind:
     boss: bool = False
     dash_interval: float = 0.0
     dash_duration: float = 0.0
+    targets_player: bool = False
+    xp_reward: int = 20
 
 
-# Three ordinary enemy classes use different health, speed, attack timing, and
-# attack style. The fourth entry is reserved for the final-wave boss.
+# Ordinary enemies use different health, speed, attack timing, and attack style.
 ENEMY_KINDS = (
-    EnemyKind(('熊', 'Bear'), 'bear', 64, 43, 10, 12, 15, RED, 1.0),
+    EnemyKind(('熊', 'Bear'), 'bear', 64, 43, 10, 12, 15, RED, 1.0,
+              xp_reward=20),
     EnemyKind(('小熊', 'Small bear'), 'small_bear', 32, 92, 5, 7, 11, '#ffac66', 0.68,
-              dash_interval=3.8, dash_duration=0.65),
-    EnemyKind(('牛來', 'Niulai'), 'niulai', 58, 46, 8, 9, 15, PURPLE, 1.2, 118, True),
-    EnemyKind(('最終 Boss', 'Final boss'), 'boss', 1250, 24, 24, 25, 31, RED, 1.15, boss=True),
+              dash_interval=3.8, dash_duration=0.65, xp_reward=15),
+    EnemyKind(('牛來', 'Niulai'), 'niulai', 58, 46, 8, 9, 15, PURPLE, 1.2, 118, True,
+              xp_reward=24),
+    EnemyKind(('奶龍', 'Nailong'), 'nailong', 72, 84, 8, 20, 13, GOLD, 0.85,
+              targets_player=True, xp_reward=25),
+    EnemyKind(('最終 Boss', 'Final boss'), 'boss', 1250, 24, 24, 25, 31, RED, 1.15,
+              boss=True, xp_reward=60),
 )
-BOSS_KIND = 3
+BOSS_KIND = 4
 BOSS_WAVE = 4
+BOSS_PHASE_COUNT = 3
 FIELD2_START_WAVE = 3
 
 WAVES = (
     (0, 0, 1, 0, 1, 0, 0, 1),
-    (0, 1, 2, 0, 1, 0, 2, 1, 0, 1, 2, 0),
-    (1, 2, 0, 1, 2, 0, 1, 0, 2, 1, 0, 2, 0, 1, 2, 0),
-    (2, 1, 0, 1, 2, 0, 1, 2, 0, 1, 0, 2, 1, 2, 0, 1, 2, 0, 1, 2),
-    (1, 2, 0, 1, 2, 0, 2, 1, 0, 2, 1, 0, 1, 2, 0, 2, 1, 2, 0, 1, 2, 0, 1, 2),
+    (0, 1, 2, 0, 1, 0, 2, 1, 0, 1, 2, 0, 3),
+    (1, 2, 0, 1, 2, 0, 1, 0, 2, 1, 0, 2, 0, 1, 2, 0, 3, 3),
+    (2, 1, 0, 1, 2, 0, 1, 2, 0, 1, 0, 2, 1, 2, 0, 1, 2, 0, 1, 2, 3, 3, 3),
+    (1, 2, 0, 1, 2, 0, 2, 1, 0, 2, 1, 0, 1, 2, 0, 2, 1, 2, 0, 1, 2, 0, 1, 2,
+     3, 3, 3, 3),
+)
+
+# Hard mode continues for three more waves after its first boss encounter.
+HARD_WAVES = WAVES + (
+    (0, 1, 2, 0, 3, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 3),
+    (1, 2, 0, 3, 1, 2, 0, 3, 1, 2, 0, 3, 1, 2, 3, 3, 3, 0, 1),
+    (2, 3, 1, 0, 2, 3, 1, 0, 2, 3, 1, 0, 2, 3, 1, 2, 3, 3, 3, 3, 0, 1),
 )
 
 # Longer gaps make each wave last longer and leave more time to react.
 SPAWN_INTERVALS = (1.45, 1.3, 1.18, 1.08, 0.98)
+HARD_SPAWN_INTERVALS = SPAWN_INTERVALS + (0.78, 0.68, 0.58)
 
 
 @dataclass(frozen=True)

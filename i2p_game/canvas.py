@@ -1,18 +1,32 @@
 """Pygame and Tkinter drawing adapters."""
 
 from pathlib import Path
+from collections import deque
 from .artwork import ARTWORK_FILES, SPRITE_SIZES
+from .config import HEIGHT, RENDER_SCALE, WIDTH
+
+
+# These small source images are illustrated/pixel-style sprites.  Nearest
+# neighbour scaling keeps their edges crisp when the resizable window grows.
+CRISP_ARTWORK = {
+    'defender', 'bear', 'small_bear', 'niulai', 'boss', 'traffic_light',
+    'wall', 'lake', 'dog', 'egg_launcher', 'egg',
+}
+
 
 class PygameCanvas:
     def __init__(self, pygame, screen):
-        self.pg, self.screen = pygame, screen
-
-        self.art = {
+        self.pg = pygame
+        self.display = screen
+        self.logical_size = WIDTH, HEIGHT
+        self.source_art = {
             name: pygame.image.load(str(path)).convert_alpha()
             for name, path in ARTWORK_FILES.items()
         }
-        for name, size in SPRITE_SIZES.items():
-            self.art[name] = pygame.transform.smoothscale(self.art[name], size)
+        self._remove_white_background(self.source_art['nailong'])
+        self.scale = RENDER_SCALE * self.display_scale()
+        self.screen = self._new_render_surface()
+        self._rebuild_render_art()
 
         self.font_file = (
             Path(__file__).resolve().parent.parent
@@ -29,57 +43,146 @@ class PygameCanvas:
         self.font_file = str(self.font_file)
         self.chinese = True
         self.fonts = {}
+        self.portrait_cache = {}
 
         # 測試字型能否正常渲染中文字
-        test_font = pygame.font.Font(self.font_file, 20)
+        test_font = pygame.font.Font(self.font_file, round(20 * self.scale))
         test_surface = test_font.render(
             "清大大禮堂", True, (255, 255, 255)
         )
         print("Font test successful:", test_surface.get_size())
 
+    @staticmethod
+    def _remove_white_background(image):
+        """Make the edge-connected near-white JPEG backdrop transparent."""
+        width, height = image.get_size()
+        queue = deque()
+
+        def is_background(x, y):
+            red, green, blue, alpha = image.get_at((x, y))
+            return (alpha > 0 and min(red, green, blue) >= 238
+                    and max(red, green, blue) - min(red, green, blue) <= 18)
+
+        def enqueue(x, y):
+            if is_background(x, y):
+                image.set_at((x, y), (255, 255, 255, 0))
+                queue.append((x, y))
+
+        for x in range(width):
+            enqueue(x, 0)
+            enqueue(x, height - 1)
+        for y in range(1, height - 1):
+            enqueue(0, y)
+            enqueue(width - 1, y)
+
+        while queue:
+            x, y = queue.popleft()
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if 0 <= nx < width and 0 <= ny < height and is_background(nx, ny):
+                    image.set_at((nx, ny), (255, 255, 255, 0))
+                    queue.append((nx, ny))
+
     def clear(self, color):
         self.screen.fill(color)
 
+    def present(self):
+        """Downsample the 2x-window-resolution frame into the display."""
+        self.pg.transform.smoothscale(self.screen, self.display.get_size(), self.display)
+
+    def set_display(self, screen):
+        """Resize the render surface and artwork with the display scale."""
+        self.display = screen
+        self.scale = RENDER_SCALE * self.display_scale()
+        self.screen = self._new_render_surface()
+        self._rebuild_render_art()
+        self.fonts.clear()
+        self.portrait_cache.clear()
+
+    def _new_render_surface(self):
+        width, height = self.display.get_size()
+        return self.pg.Surface((width * RENDER_SCALE, height * RENDER_SCALE))
+
+    def _rebuild_render_art(self):
+        self.art = {}
+        for name, source in self.source_art.items():
+            width, height = SPRITE_SIZES[name]
+            scaled_size = (round(width * self.scale), round(height * self.scale))
+            scaler = self.pg.transform.scale if name in CRISP_ARTWORK else self.pg.transform.smoothscale
+            self.art[name] = scaler(source, scaled_size)
+
+    def display_scale(self):
+        return self.display.get_width() / self.logical_size[0]
+
     def image(self, name, x, y):
-        self.screen.blit(self.art[name], (int(x), int(y)))
+        self.screen.blit(self.art[name], (int(x * self.scale), int(y * self.scale)))
+
+    def portrait(self, name, x, y, size):
+        key = name, size
+        if key not in self.portrait_cache:
+            source = self.source_art[name]
+            width, height = source.get_size()
+            side = min(width, height)
+            crop = source.subsurface(self.pg.Rect((width - side) // 2, 0, side, side)).copy()
+            output_size = int(size * self.scale)
+            self.portrait_cache[key] = self.pg.transform.smoothscale(
+                crop, (output_size, output_size)
+            )
+        self.screen.blit(
+            self.portrait_cache[key],
+            (int(x * self.scale), int(y * self.scale)),
+        )
 
     def sprite(self, name, x, foot_y):
         width, height = self.art[name].get_size()
-        top = foot_y - height
-        self.image(name, x - width / 2, top)
+        top = foot_y - height / self.scale
+        self.image(name, x - width / self.scale / 2, top)
         return top
 
     def rect(self, x, y, width, height, color, outline=None, line_width=1):
-        bounds = self.pg.Rect(int(x), int(y), int(width), int(height))
+        bounds = self.pg.Rect(int(x * self.scale), int(y * self.scale),
+                              int(width * self.scale), int(height * self.scale))
         self.pg.draw.rect(self.screen, color, bounds)
         if outline:
-            self.pg.draw.rect(self.screen, outline, bounds, line_width)
+            self.pg.draw.rect(
+                self.screen, outline, bounds,
+                max(1, round(line_width * self.scale)),
+            )
 
     def circle(self, x, y, radius, color, outline=None, width=1):
-        center = int(x), int(y)
+        center = int(x * self.scale), int(y * self.scale)
         if color:
-            self.pg.draw.circle(self.screen, color, center, int(radius))
+            self.pg.draw.circle(self.screen, color, center, int(radius * self.scale))
         if outline:
-            self.pg.draw.circle(self.screen, outline, center, int(radius), width)
+            self.pg.draw.circle(self.screen, outline, center, int(radius * self.scale),
+                                max(1, round(width * self.scale)))
 
     def line(self, start, end, color, width=1):
-        self.pg.draw.line(self.screen, color, start, end, width)
+        start = (int(start[0] * self.scale), int(start[1] * self.scale))
+        end = (int(end[0] * self.scale), int(end[1] * self.scale))
+        self.pg.draw.line(
+            self.screen, color, start, end, max(1, round(width * self.scale))
+        )
 
     def polygon(self, points, color, outline=None):
+        points = [(int(x * self.scale), int(y * self.scale)) for x, y in points]
         self.pg.draw.polygon(self.screen, color, points)
         if outline:
-            self.pg.draw.polygon(self.screen, outline, points, 1)
+            self.pg.draw.polygon(
+                self.screen, outline, points, max(1, round(self.scale))
+            )
 
     def text(self, x, y, value, size, color, anchor):
         if size not in self.fonts:
-            self.fonts[size] = self.pg.font.Font(self.font_file, size)
+            self.fonts[size] = self.pg.font.Font(
+                self.font_file, max(1, round(size * self.scale))
+            )
 
         surface = self.fonts[size].render(value, True, color)
         box = surface.get_rect()
         setattr(
             box,
             {'w': 'midleft', 'e': 'midright', 'center': 'center'}[anchor],
-            (int(x), int(y))
+            (int(x * self.scale), int(y * self.scale))
         )
         self.screen.blit(surface, box)
 
@@ -92,6 +195,11 @@ class TkCanvas:
         self.art = {}
         for name, path in ARTWORK_FILES.items():
             self.art[name] = PhotoImage(master=canvas, file=str(path))
+        for name, size in SPRITE_SIZES.items():
+            art = self.art[name]
+            if (art.width(), art.height()) != size:
+                self.art[name] = self._resize_photo(art, *size)
+        self.portrait_cache = {}
         available = set(families)
         preferred = ('Microsoft JhengHei UI', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans CJK TC', 'WenQuanYi Zen Hei')
         self.family = next((name for name in preferred if name in available), None)
@@ -105,6 +213,43 @@ class TkCanvas:
 
     def image(self, name, x, y):
         self.canvas.create_image(x, y, image=self.art[name], anchor='nw')
+
+    def _resize_photo(self, source, width, height):
+        from tkinter import PhotoImage
+
+        source_width, source_height = source.width(), source.height()
+        if source_width >= width and source_height >= height:
+            factor = max(1, min(source_width // width, source_height // height))
+            scaled = source.subsample(factor)
+        else:
+            factor = max((width + source_width - 1) // source_width,
+                         (height + source_height - 1) // source_height)
+            scaled = source.zoom(factor)
+        scaled_width, scaled_height = scaled.width(), scaled.height()
+        left, top = (scaled_width - width) // 2, (scaled_height - height) // 2
+        resized = PhotoImage(master=self.canvas, width=width, height=height)
+        resized.tk.call(str(resized), 'copy', str(scaled), '-from', left, top,
+                        left + width, top + height, '-to', 0, 0)
+        return resized
+
+    def portrait(self, name, x, y, size):
+        key = name, size
+        if key not in self.portrait_cache:
+            source = self.art[name]
+            width, height = source.width(), source.height()
+            side = min(width, height)
+            crop = self._new_photo(side, side)
+            crop.tk.call(str(crop), 'copy', str(source), '-from',
+                         (width - side) // 2, 0,
+                         (width - side) // 2 + side, side, '-to', 0, 0)
+            self.portrait_cache[key] = self._resize_photo(crop, size, size)
+        self.canvas.create_image(
+            x, y, image=self.portrait_cache[key], anchor='nw'
+        )
+
+    def _new_photo(self, width, height):
+        from tkinter import PhotoImage
+        return PhotoImage(master=self.canvas, width=width, height=height)
 
     def sprite(self, name, x, foot_y):
         art = self.art[name]

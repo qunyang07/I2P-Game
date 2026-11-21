@@ -21,11 +21,16 @@ class Enemy:
 @dataclass
 class Tower:
     kind: int
-    upgraded: bool = False
+    upgrade_level: int = 1
     wait: float = 0.0
     hp: int = 0
     max_hp: int = 0
     effect: float = 0.0
+    locked: bool = False
+
+    @property
+    def upgraded(self):
+        return self.upgrade_level > 1
 
 
 @dataclass
@@ -45,10 +50,18 @@ class Shot:
 
 
 @dataclass
-class BossEgg:
-    angle: float
-    x: float = 0.0
-    y: float = 0.0
+class Projectile:
+    x: float
+    y: float
+    vx: float
+    vy: float
+    damage: int
+    splash_damage: int
+    splash_radius: int
+    radius: int = 5
+    artwork: str | None = 'egg'
+    target_type: str = 'enemies'
+    color: str = '#78d7ff'
 
 
 @dataclass
