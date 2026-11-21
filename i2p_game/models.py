@@ -42,6 +42,7 @@ class Shot:
     color: str
     remaining: float = 0.12
     artwork: str | None = None
+<<<<<<< HEAD
 
 
 @dataclass
@@ -49,6 +50,8 @@ class BossEgg:
     angle: float
     x: float = 0.0
     y: float = 0.0
+=======
+>>>>>>> eb3320bcaea2b5f08323efcc69ac7c7417d1d56e
 
 
 @dataclass

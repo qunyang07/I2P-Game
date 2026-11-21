@@ -1,4 +1,5 @@
 """Wave progression, combat, economy, and upgrade rules."""
+<<<<<<< HEAD
 
 import random
 from math import cos, hypot, pi, sin
@@ -8,12 +9,25 @@ from .config import (
     BOSS_HP_MULTIPLIER, BOSS_KIND, BOSS_PHASE_COUNT, BOSS_PHASE_ENTRANCES,
     BOSS_WAVE, BUILDING_HP, DEFENSES, ENEMY_KINDS, ENTRANCES, FIELD,
     MAX_BASE_HP, PADS, PLAYER_MELEE_COOLDOWN,
+=======
+
+import random
+from math import hypot
+
+from .config import (
+    BASE, BASE_RADIUS, BLUE, BOSS_ENTRANCE, BOSS_KIND, BOSS_WAVE, DEFENSES,
+    ENEMY_KINDS, ENTRANCES, FIELD, MAX_BASE_HP, PADS, PLAYER_MELEE_COOLDOWN,
+>>>>>>> eb3320bcaea2b5f08323efcc69ac7c7417d1d56e
     PLAYER_MELEE_FLASH_DURATION, PLAYER_MELEE_RANGE, PLAYER_RANGED_INTERVAL,
     PLAYER_RANGED_RANGE, REPAIR_COST, REPAIR_HP, SPAWN_INTERVALS,
     STARTING_PLAYER_HP, UPGRADE_COST, WAVES,
 )
 from .geometry import distance
+<<<<<<< HEAD
 from .models import BossEgg, Drop, Enemy, Shot, Tower
+=======
+from .models import Drop, Enemy, Shot, Tower
+>>>>>>> eb3320bcaea2b5f08323efcc69ac7c7417d1d56e
 
 
 class Game:
@@ -32,8 +46,11 @@ class Game:
         self.rng.shuffle(self.route_queue)
         self.spawn_wait = 0.75
         self.boss_spawned = False
+<<<<<<< HEAD
         self.boss_phase = 0
         self.boss_eggs = []
+=======
+>>>>>>> eb3320bcaea2b5f08323efcc69ac7c7417d1d56e
         self.player_x, self.player_y = 425.0, 467.0
         self.player_hp = self.max_player_hp = STARTING_PLAYER_HP
         self.base_hp = MAX_BASE_HP
@@ -99,9 +116,14 @@ class Game:
             return
         defense = DEFENSES[kind]
         if self.spend(defense.cost):
+<<<<<<< HEAD
             max_hp = defense.durability or BUILDING_HP
             self.towers[self.selected_pad] = Tower(
                 kind, hp=max_hp, max_hp=max_hp
+=======
+            self.towers[self.selected_pad] = Tower(
+                kind, hp=defense.durability, max_hp=defense.durability
+>>>>>>> eb3320bcaea2b5f08323efcc69ac7c7417d1d56e
             )
             self.message(f'已建造{defense.name[0]}', f'{defense.name[1]} built')
 
@@ -187,6 +209,7 @@ class Game:
         self.spawned += 1
 
     def spawn_boss(self):
+<<<<<<< HEAD
         x, y = BOSS_PHASE_ENTRANCES[0]
         hp = self.boss_phase_hp()
         self.enemies.append(Enemy(BOSS_KIND, x, y, hp, hp))
@@ -242,6 +265,15 @@ class Game:
             egg.angle = (egg.angle + BOSS_EGG_ORBIT_SPEED * dt) % (2 * pi)
             self.position_boss_egg(egg, boss)
 
+=======
+        kind = ENEMY_KINDS[BOSS_KIND]
+        x, y = BOSS_ENTRANCE
+        hp = kind.hp + 120 * self.wave
+        self.enemies.append(Enemy(BOSS_KIND, x, y, hp, hp))
+        self.boss_spawned = True
+        self.message('最終 Boss 出現！', 'The final boss has arrived!')
+
+>>>>>>> eb3320bcaea2b5f08323efcc69ac7c7417d1d56e
     def wall_on_route(self, enemy, kind, dx, dy, length):
         """Return the first wall intersecting an enemy's straight route to base."""
         squared_length = dx * dx + dy * dy

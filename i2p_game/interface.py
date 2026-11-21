@@ -167,7 +167,11 @@ class Interface:
                 draw.sprite(defense.artwork, x, y + 22)
                 if tower.upgraded:
                     draw.circle(x, y + 17, 3, TEXT)
+<<<<<<< HEAD
                 if tower.max_hp and (defense.mode == 'wall' or tower.hp < tower.max_hp):
+=======
+                if defense.mode == 'wall' and tower.max_hp:
+>>>>>>> eb3320bcaea2b5f08323efcc69ac7c7417d1d56e
                     self.bar(x - 24, y + 23, 48, 4, tower.hp / tower.max_hp, RED)
                 if tower.effect > 0 and defense.mode == 'stun':
                     draw.circle(x, y, 36, None, outline=defense.color, width=2)
@@ -198,9 +202,12 @@ class Interface:
             draw.circle(*shot.target, 4, shot.color)
             if shot.artwork:
                 draw.sprite(shot.artwork, shot.target[0], shot.target[1] + 8)
+<<<<<<< HEAD
         for egg in game.boss_eggs:
             draw.circle(egg.x, egg.y, 12, '#4a375b', outline=PURPLE, width=2)
             draw.sprite('egg', egg.x, egg.y + 10)
+=======
+>>>>>>> eb3320bcaea2b5f08323efcc69ac7c7417d1d56e
         x, y = game.player_x, game.player_y
         if game.hurt_wait <= 0 or int(game.hurt_wait * 24) % 2 == 0:
             draw.circle(x, y, 15, '#224e68', outline=BLUE, width=2)
@@ -239,6 +246,7 @@ class Interface:
                      if ENEMY_KINDS[enemy.kind].boss and enemy.hp > 0), None)
         if boss is None:
             return
+<<<<<<< HEAD
         x, y, width = FIELD[0] + 90, FIELD[1] + 10, FIELD[2] - 180
         phase = max(1, self.game.boss_phase)
         self.label(x + width / 2, y, f'最終 Boss・階段 {phase}/3',
@@ -254,6 +262,15 @@ class Interface:
             bar_y = y + 9 + (index - 1) * 9
             self.canvas.rect(x, bar_y, width, 7, '#08121b', outline=color)
             self.bar(x + 2, bar_y + 2, width - 4, 3, fraction, color)
+=======
+        x, y, width, height = FIELD[0] + 90, FIELD[1] + 10, FIELD[2] - 180, 14
+        self.canvas.rect(x, y, width, height, '#08121b', outline=RED)
+        filled = int((width - 4) * max(0.0, boss.hp / boss.max_hp))
+        if filled:
+            self.canvas.rect(x + 2, y + 2, filled, height - 4, RED)
+        self.label(x + width / 2, y + height / 2,
+                   '最終 Boss', 'FINAL BOSS', 11, TEXT, 'center')
+>>>>>>> eb3320bcaea2b5f08323efcc69ac7c7417d1d56e
 
     def draw_side(self):
         draw, game = self.canvas, self.game
@@ -325,7 +342,10 @@ class Interface:
             ('紅綠燈暈眩群敵；圍牆擋路但會被打壞；小湖淹一隻敵人。', 'Traffic light stuns groups; walls block and break; lakes drown one enemy.'),
             ('校狗近攻；奶蛋發射器遠攻並波及附近敵人。R 修禮堂，U 升級設施。', 'Dog attacks nearby; egg launcher fires far and splashes. R repairs; U upgrades.'),
             ('熊耐打近攻；小熊會衝刺；牛來會遠距攻擊。第五波一般敵人清完後出現 Boss。', 'Bear is tough and melee; small bears dash; Niulai attacks at range. The boss follows Wave 5.'),
+<<<<<<< HEAD
             ('Boss 共三階段；每條血條耗盡會從不同入口重進。第 2、3 階段有奶蛋環繞，不會造成傷害。', 'Boss has three stages and re-enters from a new entrance after each bar. Eggs orbit in phases 2–3 without dealing damage.'),
+=======
+>>>>>>> eb3320bcaea2b5f08323efcc69ac7c7417d1d56e
             ('守住禮堂並擊敗 Boss 獲勝；玩家或禮堂生命歸零則失敗。', 'Defeat the boss while keeping both HP bars above zero to win.'),
         )
         for index, row in enumerate(rows):
