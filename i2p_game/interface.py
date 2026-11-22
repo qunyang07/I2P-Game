@@ -251,7 +251,7 @@ class Interface:
             self.game.message('靠近熊後施展近戰', 'Approach the bear, then melee')
         elif self.tutorial_step == 1 and self.game.tutorial_hit:
             self.tutorial_step = 2
-            self.game.message('走到金色方塊上收集零件', 'Walk over the gold square to collect parts')
+            self.game.message('靠近金色方塊會自動吸取零件', 'Approach the gold square to collect parts')
         elif self.tutorial_step == 2 and self.game.parts:
             self.game.parts = max(self.game.parts, 2)
             self.game.phase = 'prepare'
@@ -601,7 +601,8 @@ class Interface:
                     draw.circle(x, y, 36, None, outline=defense.color, width=2)
                 elif tower.effect > 0 and defense.mode == 'trap':
                     draw.circle(x, y, 34, None, outline=defense.color, width=2)
-                elif tower.effect > 0 and defense.mode == 'dog':
+                elif (tower.effect > 0 and defense.mode == 'dog'
+                      and self.game.phase == 'combat'):
                     draw.image('bark', x - 17, y - 55)
                 if tower.wait > 0 and tower.wait_total > 0:
                     self.cooldown_ring(x, y, 27.5,
@@ -788,7 +789,7 @@ class Interface:
         self.label(868, 399, '自動遠程射擊；近戰需手動', 'Auto ranged; melee is manual', 14, MUTED)
         self.label(868, 430, 'Space / 點擊：圓形範圍近戰', 'Space / click: circular melee', 15, GOLD)
         self.label(868, 478, 'WASD 移動', 'WASD to move', 15)
-        self.label(868, 511, '走近金色、紫色物品撿取', 'Walk over gold / purple drops', 14, MUTED)
+        self.label(868, 511, '靠近零件或能量會自動吸取', 'Nearby drops fly to you', 14, MUTED)
         self.label(868, 544, 'Tab 切換；Enter 選取；Esc 暫停',
                    'Tab focus; Enter select; Esc pause', 11, MUTED)
 
@@ -886,7 +887,7 @@ class Interface:
         self.label(210, 162, '新手指引與操作說明', 'New player guide', 27)
         rows = (
             ('Tab / Shift+Tab 切換按鈕，Enter 選取；WASD 移動，備戰時方向鍵選塔種與塔位。', 'Tab / Shift+Tab focus buttons; Enter selects. WASD moves; arrows choose type and slot in prep.'),
-            ('附近敵人會被自動攻擊；金色是零件，紫色是能量，走近即可拾取。', 'Nearby enemies are attacked automatically. Gold is parts; purple is energy.'),
+            ('附近敵人會被自動攻擊；金色零件與紫色能量會飛向靠近的玩家。', 'Auto attacks target nearby foes. Gold parts and purple energy fly to you when nearby.'),
             ('備戰時上下選塔種、左右選塔位；按 Enter 或 1–5 建造。', 'In prep, up/down choose type; left/right choose slot. Enter or 1–5 builds.'),
             ('紅綠燈暈眩群敵；圍牆擋路但會被打壞；成功湖淹一隻敵人。', 'Traffic light stuns groups; walls block and break; Cheng Kung Lake drowns one enemy.'),
             ('牛排範圍攻擊並擊退敵人；奶蛋發射器遠攻並波及附近敵人。R 修禮堂，U 升級設施。', 'Steak attacks and knocks back nearby enemies; egg launcher fires far and splashes. R repairs; U upgrades.'),
@@ -1002,8 +1003,8 @@ class Interface:
                 damage_zh = f'{defense.damage}/{defense.damage * 3 // 2}/{defense.damage * 2}'
                 damage_en = f'{defense.damage}/{defense.damage * 3 // 2}/{defense.damage * 2}'
                 targeting_zh, targeting_en = '範圍內所有敵人', 'All enemies in range'
-                special_zh = '擊退力 68/80/92（Boss 減半）；Lv.2/3 射程 +10/+20、冷卻 -20%/-35%'
-                special_en = 'Knockback 68/80/92; half vs. bosses; Lv2/3 range +10/+20, cooldown -20%/-35%'
+                special_zh = '擊退力 34/40/46（Boss 再減半）；Lv.2/3 射程 +10/+20、冷卻 -20%/-35%'
+                special_en = 'Knockback 34/40/46; halved again vs. bosses; Lv2/3 range +10/+20, cooldown -20%/-35%'
             elif defense.mode == 'egg':
                 damage_zh = f'{defense.damage}/{defense.damage * 3 // 2}/{defense.damage * 2} 單體'
                 damage_en = f'{defense.damage}/{defense.damage * 3 // 2}/{defense.damage * 2} direct'
@@ -1086,7 +1087,7 @@ class Interface:
         prompts = (
             ('第 1 步：按 WASD 走一步。', 'Step 1: Move with WASD.'),
             ('第 2 步：靠近熊，按 Space 或點擊場地施展近戰。', 'Step 2: Approach the bear, then press Space or click to melee.'),
-            ('第 3 步：走到金色方塊上收集零件。', 'Step 3: Walk over the gold square to collect parts.'),
+            ('第 3 步：靠近金色方塊，讓零件飛向你。', 'Step 3: Approach the gold square so the part flies to you.'),
             ('第 4 步：選空建造點，按 2 或點選「施工圍牆」。', 'Step 4: Select an empty pad, then press 2 or choose Construction wall.'),
             ('完成！按 Backspace 重置並開始正式第一波。',
              'Complete! Press Backspace to reset and begin Wave 1.'),

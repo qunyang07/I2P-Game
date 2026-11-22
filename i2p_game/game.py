@@ -7,7 +7,8 @@ from .config import (
     ALL_PADS, BASE, BASE_RADIUS, BLUE, BOSS_ENTRANCE, BOSS_KIND, BOSS_PHASE_COUNT,
     BOSS_PHASE_SPEED_MULTIPLIERS,
     BOSS_WAVE, DEFENSES, DOG_EFFECT_DURATION, DOG_KNOCKBACK_DISTANCE,
-    DOG_KNOCKBACK_EFFECT_DURATION,
+    DOG_KNOCKBACK_EFFECT_DURATION, DROP_ATTRACT_RANGE, DROP_ATTRACT_SPEED,
+    DROP_COLLECT_RANGE,
     EGG_PROJECTILE_SPEED, ENEMY_KINDS, ENTRANCES,
     FIELD, HARD_PAD_COSTS, HARD_SPAWN_INTERVALS, HARD_WAVES, MAX_BASE_HP,
     PADS, PLAYER_MELEE_COOLDOWN,
@@ -82,6 +83,7 @@ class Game:
     def advance_wave(self):
         if self.phase != 'prepare':
             return
+        self.clear_dog_effects()
         self.projectiles.clear()
         if self.boss_preparation:
             self.boss_preparation = False
@@ -102,6 +104,12 @@ class Game:
             self.boss_phase = 0
             self.phase = 'combat'
             self.notice_left = 0.0
+
+    def clear_dog_effects(self):
+        """Discard bark animation timers when leaving combat."""
+        for tower in self.towers:
+            if tower is not None and DEFENSES[tower.kind].mode == 'dog':
+                tower.effect = 0.0
 
     def can_afford(self, cost):
         return self.parts >= cost[0] and self.energy >= cost[1]
@@ -184,6 +192,7 @@ class Game:
             self.player_speed += 30
         if self.xp < self.next_xp:
             self.phase = 'prepare' if self.boss_preparation else 'combat'
+            self.clear_dog_effects()
 
     def manual_attack(self):
         """Damage every enemy in the defender's circular melee radius."""
@@ -219,15 +228,24 @@ class Game:
         self.player_x = max(left + 18, min(left + width - 18, self.player_x))
         self.player_y = max(top + 18, min(top + height - 18, self.player_y))
 
-    def collect_drops(self):
+    def collect_drops(self, dt):
+        travel = max(DROP_ATTRACT_SPEED, self.player_speed + 120) * dt
         remaining = []
         for drop in self.drops:
-            if distance(self.player_x, self.player_y, drop.x, drop.y) <= 30:
+            dx, dy = self.player_x - drop.x, self.player_y - drop.y
+            gap = hypot(dx, dy)
+            if not drop.attracted and gap > DROP_ATTRACT_RANGE:
+                remaining.append(drop)
+                continue
+            if gap <= DROP_COLLECT_RANGE + travel:
                 if drop.energy:
                     self.energy += 1
                 else:
                     self.parts += 1
             else:
+                drop.attracted = True
+                drop.x += dx / gap * travel
+                drop.y += dy / gap * travel
                 remaining.append(drop)
         self.drops = remaining
 
@@ -491,7 +509,7 @@ class Game:
 
                 damage = (defense.damage * 2 if level >= 3 else
                           defense.damage * 3 // 2 if level == 2 else defense.damage)
-                knockback = DOG_KNOCKBACK_DISTANCE + (12 if level >= 2 else 0) + (12 if level >= 3 else 0)
+                knockback = DOG_KNOCKBACK_DISTANCE + (6 if level >= 2 else 0) + (6 if level >= 3 else 0)
                 for enemy in targets:
                     enemy.hp -= damage
                     enemy.knockback_effect = DOG_KNOCKBACK_EFFECT_DURATION
@@ -694,16 +712,16 @@ class Game:
         self.melee_wait = max(0.0, self.melee_wait - dt)
         self.melee_flash = max(0.0, self.melee_flash - dt)
         self.move_player(dx, dy, dt)
-        self.collect_drops()
         for shot in self.shots:
             shot.remaining -= dt
         self.shots = [shot for shot in self.shots if shot.remaining > 0]
         if self.tutorial_active:
             if self.phase == 'combat':
                 self.remove_defeated()
-                self.collect_drops()
+            self.collect_drops(dt)
             return
         if self.phase == 'prepare':
+            self.collect_drops(dt)
             self.update_projectiles(dt)
             return
 
@@ -726,7 +744,7 @@ class Game:
         self.update_projectiles(dt)
         self.advance_boss_phase()
         self.remove_defeated()
-        self.collect_drops()
+        self.collect_drops(dt)
 
         # Pause after boss-gate waves so the player can prepare for the boss.
         boss_due = (
@@ -752,3 +770,6 @@ class Game:
             elif self.wave < len(self.waves) - 1:
                 self.phase = 'prepare'
                 self.message('可以拾取資源，再決定如何備戰', 'Collect resources, then prepare for the next wave')
+
+        if self.phase == 'prepare':
+            self.clear_dog_effects()

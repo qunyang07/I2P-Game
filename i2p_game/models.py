@@ -43,6 +43,7 @@ class Drop:
     x: float
     y: float
     energy: bool = False
+    attracted: bool = False
 
 
 @dataclass
