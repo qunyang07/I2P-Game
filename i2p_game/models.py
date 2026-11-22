@@ -1,6 +1,6 @@
 """Small data objects used by the game and interface."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 @dataclass
@@ -26,10 +26,12 @@ class Tower:
     kind: int
     upgrade_level: int = 1
     wait: float = 0.0
+    wait_total: float = 0.0
     hp: int = 0
     max_hp: int = 0
     effect: float = 0.0
     locked: bool = False
+    stun_targets: list = field(default_factory=list)
 
     @property
     def upgraded(self):

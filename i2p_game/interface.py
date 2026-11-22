@@ -1,5 +1,7 @@
 """Input handling and game screen drawing."""
 
+from math import ceil, cos, pi, sin
+
 from .config import (
     BASE, BASE_RADIUS, BG, BLUE, BORDER, BOSS_KIND, BOSS_PHASE_COUNT, BOSS_WAVE,
     DEFENSES, ENEMY_KINDS, FIELD, GOLD, GREEN, HEIGHT, MAX_BASE_HP, MUTED,
@@ -157,6 +159,10 @@ class Interface:
     def activate_focused_button(self):
         if (self.drawn_phase != self.game.phase or self.focused_button_index is None
                 or self.focused_button_index >= len(self.buttons)):
+            return False
+        if (self.game.phase == 'prepare'
+                and self.focused_button_index == self.prepare_defense_button_start
+                + len(DEFENSES) + 2):
             return False
         if (self.game.phase == 'prepare'
                 and self.prepare_defense_button_start <= self.focused_button_index
@@ -457,8 +463,6 @@ class Interface:
                     elif self.prepare_selection_active:
                         self.game.selected_pad = self.prepare_focused_pad
                         self.build_defense(self.prepare_focused_defense_kind)
-                    else:
-                        self.start_next_wave()
                 elif key == 'space' and self.prepare_focus_area == 'controls':
                     self.game.selected_pad = self.prepare_focused_pad
                     self.build_defense(self.prepare_focused_defense_kind)
@@ -599,6 +603,9 @@ class Interface:
                     draw.circle(x, y, 34, None, outline=defense.color, width=2)
                 elif tower.effect > 0 and defense.mode == 'dog':
                     draw.image('bark', x - 17, y - 55)
+                if tower.wait > 0 and tower.wait_total > 0:
+                    self.cooldown_ring(x, y, 27.5,
+                                       tower.wait / tower.wait_total, '#3a3a3a')
 
     def draw_entities(self):
         draw, game = self.canvas, self.game
@@ -691,6 +698,21 @@ class Interface:
         if filled:
             self.canvas.rect(x, y, filled, height, color)
 
+    def cooldown_ring(self, x, y, radius, fraction, color):
+        fraction = max(0.0, min(1.0, fraction))
+        if fraction <= 0:
+            return
+        segments = max(1, ceil(64 * fraction))
+        start_angle = -pi / 2
+        for index in range(segments):
+            angle_a = start_angle + 2 * pi * fraction * index / segments
+            angle_b = start_angle + 2 * pi * fraction * (index + 1) / segments
+            self.canvas.line(
+                (x + cos(angle_a) * radius, y + sin(angle_a) * radius),
+                (x + cos(angle_b) * radius, y + sin(angle_b) * radius),
+                color, width=3,
+            )
+
     def draw_hud(self):
         draw, game = self.canvas, self.game
         draw.rect(20, 18, 1112, 72, PANEL, outline=BORDER)
@@ -779,8 +801,7 @@ class Interface:
         percent = min(100, round(100 * game.xp / game.next_xp))
         self.label(868, 199, f'等級 {game.level}　經驗 {percent}%',
                    f'Level {game.level}　XP {percent}%', 13, GREEN)
-        instructions = ('箭頭移動焦點；紫／藍底為目前選取；Enter 建造',
-                        'Arrows move focus; filled = selected; Enter builds')
+        instructions = ('Enter 建造', 'Enter builds')
         self.label(868, 216, *instructions, 11, MUTED)
         pad_index = self.prepare_focused_pad
         tower = game.towers[pad_index]
@@ -799,15 +820,24 @@ class Interface:
         for index, defense in enumerate(DEFENSES):
             y = 251 + index * 43
             cost = defense.cost
-            zh, en = defense.name
-            self.button(868, y, 246, 30, (f'{index + 1}  {zh}   {cost[0]}零件/{cost[1]}能量',
-                                           f'{index + 1}  {en}   {cost[0]}P/{cost[1]}E'),
-                        lambda kind=index: self.build_defense(kind),
-                        defense.color, False, size=13, hover_fill=False)
+            self.button_surface((868, y, 246, 30), defense.color,
+                                hover_fill=False)
+            self.text(878, y + 15, f'{index + 1}  {self.word(*defense.name)}',
+                      12, TEXT, 'w')
+            parts_cost = (f'{cost[0]} 零件' if self.canvas.chinese
+                          else f'{cost[0]} P')
+            energy_cost = (f'{cost[1]} 能量' if self.canvas.chinese
+                           else f'{cost[1]} E')
+            self.text(1035, y + 15, parts_cost, 12, GOLD, 'e')
+            self.text(1108, y + 15, energy_cost, 12, PURPLE, 'e')
+            self.buttons.append(Button(
+                (868, y, 246, 30),
+                lambda kind=index: self.build_defense(kind),
+            ))
             self.label(878, y + 32, *defense.description, 12, MUTED)
         self.button(868, 480, 246, 35,
                     ('R  修理禮堂   4 零件', 'R  Repair auditorium   4P'),
-                    game.repair, GOLD, True, size=13)
+                    game.repair, GREEN, True, size=13)
         next_cost = (UPGRADE_COSTS[tower.upgrade_level - 1]
                      if tower is not None and tower.upgrade_level < 3 else None)
         if next_cost:
@@ -828,7 +858,7 @@ class Interface:
             'Backspace  開始下一波', 'Backspace  Start next wave'
         )
         self.button(868, 585, 246, 43, start_title, self.start_next_wave,
-                    GREEN, True, size=14)
+                    RED, True, size=14)
 
     def overlay(self, x, y, width, height):
         self.buttons.clear()

@@ -511,6 +511,7 @@ class Game:
                     enemy.y = min(max_y, max(min_y, enemy.y + dy / length * enemy_knockback))
 
                 tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
+                tower.wait_total = tower.wait
                 tower.effect = DOG_EFFECT_DURATION
                 continue
 
@@ -528,7 +529,13 @@ class Game:
                         enemy.stun_duration = duration
                         enemy.stun_elapsed = 0.0
                 tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
-                tower.effect = 0.42
+                tower.wait_total = tower.wait
+                for enemy in targets:
+                    if not any(target is enemy for target in tower.stun_targets):
+                        tower.stun_targets.append(enemy)
+                tower.effect = max(
+                    (enemy.stunned for enemy in tower.stun_targets), default=0.0
+                )
                 continue
 
             target = self.nearest_target_at(*pad, reach)
@@ -550,6 +557,7 @@ class Game:
                     pad[0], pad[1], vx, vy, damage, damage // 2, splash,
                 ))
                 tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
+                tower.wait_total = tower.wait
                 continue
 
             if defense.mode == 'trap':
@@ -558,6 +566,7 @@ class Game:
                 else:
                     target.hp = 0
                 tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
+                tower.wait_total = tower.wait
                 tower.effect = 0.5
                 self.shots.append(Shot(pad, (target.x, target.y), defense.color))
                 continue
@@ -567,6 +576,7 @@ class Game:
             target.hp -= damage
             self.shots.append(Shot(pad, (target.x, target.y), defense.color))
             tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
+            tower.wait_total = tower.wait
 
     def update_projectiles(self, dt):
         """Move straight shots and apply damage only when their path collides."""
@@ -587,8 +597,24 @@ class Game:
                 return t, distance(px, py, cx, cy) <= radius + projectile.radius
 
             if projectile.target_type == 'base':
-                t, hit = segment_hit(*BASE, BASE_RADIUS)
-                if hit:
+                base_t, base_hit = segment_hit(*BASE, BASE_RADIUS)
+                first_wall = None
+                first_wall_t = 2.0
+                for index, tower in enumerate(self.towers):
+                    if (tower is None or tower.locked or not self.unlocked_pads[index]
+                            or DEFENSES[tower.kind].mode != 'wall'):
+                        continue
+                    wall_x, wall_y = ALL_PADS[index]
+                    wall_t, wall_hit = segment_hit(wall_x, wall_y, 24)
+                    if wall_hit and wall_t < first_wall_t:
+                        first_wall, first_wall_t = index, wall_t
+                if first_wall is not None and (not base_hit or first_wall_t < base_t):
+                    wall = self.towers[first_wall]
+                    wall.hp = max(0, wall.hp - projectile.damage)
+                    if wall.hp == 0:
+                        self.towers[first_wall] = None
+                    continue
+                if base_hit:
                     self.base_hp = max(0, self.base_hp - projectile.damage)
                     continue
             elif projectile.target_type == 'player':
@@ -645,6 +671,17 @@ class Game:
             if self.difficulty != 'hard' and (self.kills % 2 == 0 or ENEMY_KINDS[enemy.kind].boss):
                 self.drops.append(Drop(enemy.x + 8, enemy.y, energy=True))
         self.enemies = survivors
+        living_stunned = {id(enemy) for enemy in survivors if enemy.stunned > 0}
+        for tower in self.towers:
+            if tower is None or DEFENSES[tower.kind].mode != 'stun':
+                continue
+            tower.stun_targets = [
+                enemy for enemy in tower.stun_targets
+                if id(enemy) in living_stunned
+            ]
+            tower.effect = max(
+                (enemy.stunned for enemy in tower.stun_targets), default=0.0
+            )
 
     def update(self, dt, dx, dy, time_scale=1.0):
         """Advance all movement, attacks, and cooldowns on scaled game time."""
