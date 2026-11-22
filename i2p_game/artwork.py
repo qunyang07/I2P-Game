@@ -3,28 +3,26 @@
 from pathlib import Path
 
 ASSET_DIR = Path(__file__).resolve().parent.parent / "assets"
-IMAGE_DIR = ASSET_DIR / "images"
+NEW_IMAGE_DIR = ASSET_DIR / "images(new)"
 
-# Runtime images are all stored in assets/images. The *_sprite and *_bg PNGs
-# are display-sized versions of the supplied artwork; no other image directory
-# is loaded by the game.
+# All runtime artwork is kept together in assets/images(new).
 ARTWORK_FILES = {
-    "field1": IMAGE_DIR / "field1_bg.png",
-    "field2": IMAGE_DIR / "field2_bg.png",
-    "auditorium_logo": IMAGE_DIR / "auditorium_logo.png",
-    "auditorium_title": IMAGE_DIR / "auditorium_title.png",
-    "defender": IMAGE_DIR / "NaiFrog_sprite.png",
-    "bear": IMAGE_DIR / "Bear_sprite.png",
-    "small_bear": IMAGE_DIR / "small_bear_sprite.png",
-    "niulai": IMAGE_DIR / "Niulai_sprite.png",
-    "nailong": IMAGE_DIR / "nailong.png",
-    "boss": IMAGE_DIR / "TungtungtungSahur_sprite.png",
-    "traffic_light": IMAGE_DIR / "Traffic_light_sprite.png",
-    "wall": IMAGE_DIR / "Wall_sprite.png",
-    "lake": IMAGE_DIR / "Lake_sprite.png",
-    "dog": IMAGE_DIR / "dog_sprite.png",
-    "egg_launcher": IMAGE_DIR / "naiEgg_launcher_sprite.png",
-    "egg": IMAGE_DIR / "naiEgg_sprite.png",
+    "field1": NEW_IMAGE_DIR / "field1_bg.png",
+    "field2": NEW_IMAGE_DIR / "field2_bg.png",
+    "auditorium_logo": NEW_IMAGE_DIR / "auditorium_logo.png",
+    "auditorium_title": NEW_IMAGE_DIR / "auditorium.jpg",
+    "defender": NEW_IMAGE_DIR / "NaiFrog.png",
+    "bear": NEW_IMAGE_DIR / "Bear.png",
+    "small_bear": NEW_IMAGE_DIR / "small_bear.png",
+    "niulai": NEW_IMAGE_DIR / "Niulai.png",
+    "nailong": NEW_IMAGE_DIR / "nailong.png",
+    "boss": NEW_IMAGE_DIR / "TungtungtungSahur.png",
+    "traffic_light": NEW_IMAGE_DIR / "Traffic_light.png",
+    "wall": NEW_IMAGE_DIR / "Wall.jpg",
+    "lake": NEW_IMAGE_DIR / "Lake.png",
+    "dog": NEW_IMAGE_DIR / "dog.png",
+    "egg_launcher": NEW_IMAGE_DIR / "naiEgg_launcher.png",
+    "egg": NEW_IMAGE_DIR / "naiEgg.png",
 }
 
 SPRITE_SIZES = {

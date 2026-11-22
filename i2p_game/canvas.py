@@ -6,24 +6,20 @@ from .artwork import ARTWORK_FILES, SPRITE_SIZES
 from .config import HEIGHT, RENDER_SCALE, WIDTH
 
 
-# These small source images are illustrated/pixel-style sprites.  Nearest
-# neighbour scaling keeps their edges crisp when the resizable window grows.
-CRISP_ARTWORK = {
-    'defender', 'bear', 'small_bear', 'niulai', 'boss', 'traffic_light',
-    'wall', 'lake', 'dog', 'egg_launcher', 'egg',
-}
-
-
 class PygameCanvas:
     def __init__(self, pygame, screen):
         self.pg = pygame
         self.display = screen
         self.logical_size = WIDTH, HEIGHT
-        self.source_art = {
+        source_art = {
             name: pygame.image.load(str(path)).convert_alpha()
             for name, path in ARTWORK_FILES.items()
         }
-        self._remove_white_background(self.source_art['nailong'])
+        self._remove_white_background(source_art['nailong'])
+        self.source_art = {
+            name: self._trim_transparent(image)
+            for name, image in source_art.items()
+        }
         self.scale = RENDER_SCALE * self.display_scale()
         self.screen = self._new_render_surface()
         self._rebuild_render_art()
@@ -54,7 +50,7 @@ class PygameCanvas:
 
     @staticmethod
     def _remove_white_background(image):
-        """Make the edge-connected near-white JPEG backdrop transparent."""
+        """Make an edge-connected near-white backdrop transparent."""
         width, height = image.get_size()
         queue = deque()
 
@@ -82,6 +78,16 @@ class PygameCanvas:
                     image.set_at((nx, ny), (255, 255, 255, 0))
                     queue.append((nx, ny))
 
+    @staticmethod
+    def _trim_transparent(image):
+        """Crop an image to its nontransparent pixels without modifying its source."""
+        bounds = image.get_bounding_rect(min_alpha=1)
+        if bounds.width == 0 or bounds.height == 0:
+            return image
+        if bounds.size == image.get_size() and bounds.topleft == (0, 0):
+            return image
+        return image.subsurface(bounds).copy()
+
     def clear(self, color):
         self.screen.fill(color)
 
@@ -104,11 +110,31 @@ class PygameCanvas:
 
     def _rebuild_render_art(self):
         self.art = {}
+        self.art_content_heights = {}
         for name, source in self.source_art.items():
             width, height = SPRITE_SIZES[name]
-            scaled_size = (round(width * self.scale), round(height * self.scale))
-            scaler = self.pg.transform.scale if name in CRISP_ARTWORK else self.pg.transform.smoothscale
-            self.art[name] = scaler(source, scaled_size)
+            target_width = round(width * self.scale)
+            target_height = round(height * self.scale)
+            source_width, source_height = source.get_size()
+            fit_scale = min(
+                target_width / source_width,
+                target_height / source_height,
+            )
+            content_width = max(1, round(source_width * fit_scale))
+            content_height = max(1, round(source_height * fit_scale))
+            content = self.pg.transform.smoothscale(
+                source, (content_width, content_height)
+            )
+            frame = self.pg.Surface(
+                (target_width, target_height), self.pg.SRCALPHA
+            )
+            frame.blit(
+                content,
+                ((target_width - content_width) // 2,
+                 target_height - content_height),
+            )
+            self.art[name] = frame
+            self.art_content_heights[name] = content_height / self.scale
 
     def display_scale(self):
         return self.display.get_width() / self.logical_size[0]
@@ -121,12 +147,22 @@ class PygameCanvas:
         if key not in self.portrait_cache:
             source = self.source_art[name]
             width, height = source.get_size()
-            side = min(width, height)
-            crop = source.subsurface(self.pg.Rect((width - side) // 2, 0, side, side)).copy()
             output_size = int(size * self.scale)
-            self.portrait_cache[key] = self.pg.transform.smoothscale(
-                crop, (output_size, output_size)
+            fit_scale = min(output_size / width, output_size / height)
+            content_size = (
+                max(1, round(width * fit_scale)),
+                max(1, round(height * fit_scale)),
             )
+            content = self.pg.transform.smoothscale(source, content_size)
+            frame = self.pg.Surface(
+                (output_size, output_size), self.pg.SRCALPHA
+            )
+            frame.blit(
+                content,
+                ((output_size - content_size[0]) // 2,
+                 (output_size - content_size[1]) // 2),
+            )
+            self.portrait_cache[key] = frame
         self.screen.blit(
             self.portrait_cache[key],
             (int(x * self.scale), int(y * self.scale)),
@@ -136,7 +172,7 @@ class PygameCanvas:
         width, height = self.art[name].get_size()
         top = foot_y - height / self.scale
         self.image(name, x - width / self.scale / 2, top)
-        return top
+        return foot_y - self.art_content_heights[name]
 
     def rect(self, x, y, width, height, color, outline=None, line_width=1):
         bounds = self.pg.Rect(int(x * self.scale), int(y * self.scale),
@@ -237,12 +273,18 @@ class TkCanvas:
         if key not in self.portrait_cache:
             source = self.art[name]
             width, height = source.width(), source.height()
-            side = min(width, height)
-            crop = self._new_photo(side, side)
-            crop.tk.call(str(crop), 'copy', str(source), '-from',
-                         (width - side) // 2, 0,
-                         (width - side) // 2 + side, side, '-to', 0, 0)
-            self.portrait_cache[key] = self._resize_photo(crop, size, size)
+            if width <= size and height <= size:
+                factor = max(1, min(size // width, size // height))
+                scaled = source.zoom(factor)
+            else:
+                factor = max(1, (width + size - 1) // size,
+                             (height + size - 1) // size)
+                scaled = source.subsample(factor)
+            frame = self._new_photo(size, size)
+            left = (size - scaled.width()) // 2
+            top = (size - scaled.height()) // 2
+            frame.tk.call(str(frame), 'copy', str(scaled), '-to', left, top)
+            self.portrait_cache[key] = frame
         self.canvas.create_image(
             x, y, image=self.portrait_cache[key], anchor='nw'
         )
