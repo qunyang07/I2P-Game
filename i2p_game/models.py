@@ -13,6 +13,8 @@ class Enemy:
     base_wait: float = 0.0
     slowed: float = 0.0
     stunned: float = 0.0
+    stun_duration: float = 0.0
+    stun_elapsed: float = 0.0
     wall_wait: float = 0.0
     dash_wait: float = 0.0
     dash_left: float = 0.0

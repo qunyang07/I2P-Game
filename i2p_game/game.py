@@ -353,6 +353,11 @@ class Game:
             if kind.dash_interval and enemy.dash_wait == 0 and enemy.dash_left == 0:
                 enemy.dash_left = kind.dash_duration
                 enemy.dash_wait = kind.dash_interval
+            if enemy.stun_duration > 0:
+                enemy.stun_elapsed += dt
+                if enemy.stun_elapsed >= enemy.stun_duration * 1.15:
+                    enemy.stun_duration = 0.0
+                    enemy.stun_elapsed = 0.0
             if enemy.stunned > 0:
                 enemy.stunned = max(0.0, enemy.stunned - dt)
                 continue
@@ -477,7 +482,10 @@ class Game:
                     continue
                 duration = defense.stun_duration + (0.7 if level >= 2 else 0) + (0.8 if level >= 3 else 0)
                 for enemy in targets:
-                    enemy.stunned = max(enemy.stunned, duration)
+                    if duration >= enemy.stunned:
+                        enemy.stunned = duration
+                        enemy.stun_duration = duration
+                        enemy.stun_elapsed = 0.0
                 tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
                 tower.effect = 0.42
                 continue

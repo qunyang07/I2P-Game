@@ -1,7 +1,7 @@
 """Input handling and game screen drawing."""
 
 from .config import (
-    BASE, BG, BLUE, BORDER, BOSS_KIND, BOSS_PHASE_COUNT, BOSS_WAVE,
+    BASE, BASE_RADIUS, BG, BLUE, BORDER, BOSS_KIND, BOSS_PHASE_COUNT, BOSS_WAVE,
     DEFENSES, ENEMY_KINDS, FIELD, GOLD, GREEN, HEIGHT, MAX_BASE_HP, MUTED,
     ALL_PADS, HARD_PAD_COSTS, PADS, PANEL, FIELD2_START_WAVE, PLAYER_MELEE_COOLDOWN,
     PLAYER_MELEE_FLASH_DURATION, PLAYER_MELEE_RANGE, PLAYER_RANGED_INTERVAL,
@@ -17,12 +17,15 @@ class Interface:
     def __init__(self, canvas):
         self.canvas = canvas
         self.game = Game()
-        self.game.phase = 'help'
         self.keys = set()
         self.buttons = []
         self.focused_button_index = None
         self.selected_defense_kind = 0
         self.prepare_selection_active = False
+        self.prepare_focus_area = None
+        self.prepare_focused_pad = 0
+        self.prepare_focused_defense_kind = 0
+        self.prepare_defense_button_start = 2
         self.pointer = (-1, -1)
         self.before_pause = 'combat'
         self.drawn_phase = None
@@ -49,21 +52,23 @@ class Interface:
         self.text(x, y, self.word(chinese, english), size, color, anchor)
 
     def button(self, x, y, width, height, title, action, accent=BLUE, primary=False,
-               size=16):
+               size=16, selected_outline=False, hover_fill=True):
         bounds = (x, y, width, height)
-        self.button_surface(bounds, accent, primary)
+        self.button_surface(bounds, accent, primary, selected_outline, hover_fill)
         self.text(x + width / 2, y + height / 2, self.word(*title), size,
                   BG if primary else TEXT, 'center')
         self.buttons.append(Button(bounds, action))
 
-    def button_surface(self, bounds, accent=BLUE, primary=False):
+    def button_surface(self, bounds, accent=BLUE, primary=False,
+                       selected_outline=False, hover_fill=True):
         index = len(self.buttons)
         focused = index == self.focused_button_index
         hover = inside(*self.pointer, bounds)
-        fill = accent if primary else ('#294355' if hover else '#203345')
-        if focused and not primary:
-            fill = '#3b5c6c'
-        outline = GOLD if focused else accent if hover or primary else BORDER
+        fill = accent if primary else (
+            '#294355' if hover and hover_fill else '#203345'
+        )
+        # Selection controls the fill; keyboard focus only adds an outer ring.
+        outline = GOLD if focused else accent if hover or primary or selected_outline else BORDER
         self.canvas.rect(*bounds, fill, outline=outline,
                          line_width=3 if focused else 1)
         return index, focused, fill
@@ -93,8 +98,8 @@ class Interface:
         color = GOLD if focused else RED
         cx, cy = x + width / 2, y + height / 2
         self.canvas.circle(cx, cy + 1, 10, None, outline=color, width=3)
-        self.canvas.rect(cx - 7, cy + 4, 14, 9, fill)
-        self.canvas.line((cx, cy - 12), (cx, cy + 2), color, width=3)
+        self.canvas.line((cx, cy - 12), (cx, cy - 0.1), fill, width=9)
+        self.canvas.line((cx, cy - 12), (cx, cy - 0.1), color, width=3)
         self.buttons.append(Button(bounds, self.ask_to_quit))
 
     def cycle_game_speed(self):
@@ -119,31 +124,83 @@ class Interface:
             elif self.focused_button_index < 3 + profile_count:
                 self.encyclopedia_focus_area = 'profile'
                 self.encyclopedia_focus_profile = self.focused_button_index - 3
+            else:
+                self.encyclopedia_focus_area = 'back'
+
+    def move_title_focus(self, direction):
+        if self.drawn_phase != 'title' or not self.buttons:
+            return
+        if self.focused_button_index is None:
+            self.focused_button_index = 0
+            return
+        neighbors = {
+            0: {'left': 1, 'right': 1, 'up': 5, 'down': 2},
+            1: {'left': 0, 'right': 0, 'up': 5, 'down': 4},
+            2: {'left': 4, 'right': 3, 'up': 0, 'down': 0},
+            3: {'left': 2, 'right': 4, 'up': 0, 'down': 1},
+            4: {'left': 3, 'right': 2, 'up': 1, 'down': 1},
+            5: {'left': 0, 'right': 1, 'up': 0, 'down': 1},
+        }
+        current = self.focused_button_index
+        self.focused_button_index = neighbors.get(current, {}).get(direction, current)
+
+    def move_dialog_focus(self, direction):
+        if (self.game.phase != 'pause' or self.drawn_phase != 'pause'
+                or not self.buttons):
+            return
+        step = -1 if direction in ('left', 'up') else 1
+        current = self.focused_button_index
+        if current is None or current >= len(self.buttons):
+            current = 0 if step > 0 else len(self.buttons) - 1
+        self.focused_button_index = (current + step) % len(self.buttons)
 
     def activate_focused_button(self):
         if (self.drawn_phase != self.game.phase or self.focused_button_index is None
                 or self.focused_button_index >= len(self.buttons)):
             return False
+        if (self.game.phase == 'prepare'
+                and self.prepare_defense_button_start <= self.focused_button_index
+                < self.prepare_defense_button_start + len(DEFENSES) + 2):
+            self.game.selected_pad = self.prepare_focused_pad
         self.buttons[self.focused_button_index].action()
         self.advance_tutorial()
         return True
 
     def move_pad_selection(self, direction=1):
         count = len(ALL_PADS) if self.game.difficulty == 'hard' else len(PADS)
-        self.game.selected_pad = (self.game.selected_pad + direction) % count
+        self.prepare_focused_pad = (self.prepare_focused_pad + direction) % count
+        self.prepare_focus_area = 'controls'
         self.prepare_selection_active = True
-        self.focused_button_index = None
+        if self.focused_button_index is None:
+            self.focused_button_index = (
+                self.prepare_defense_button_start + self.prepare_focused_defense_kind
+            )
 
     def move_defense_selection(self, direction):
-        self.selected_defense_kind = (
-            self.selected_defense_kind + direction
-        ) % len(DEFENSES)
-        self.prepare_selection_active = True
-        self.focused_button_index = None
+        start = self.prepare_defense_button_start
+        repair_index = start + len(DEFENSES)
+        upgrade_index = repair_index + 1
+        focus_order = [
+            *range(start, repair_index), repair_index, upgrade_index,
+        ]
+        try:
+            current = focus_order.index(self.focused_button_index)
+            next_focus = (current + direction) % len(focus_order)
+        except ValueError:
+            next_focus = 0
+        self.focused_button_index = focus_order[next_focus]
+        if self.focused_button_index < repair_index:
+            self.prepare_focused_defense_kind = self.focused_button_index - start
+            self.prepare_focus_area = 'controls'
+            self.prepare_selection_active = True
+        else:
+            self.prepare_focus_area = 'buttons'
+            self.prepare_selection_active = False
 
     def build_defense(self, kind):
         self.selected_defense_kind = kind
         self.prepare_selection_active = False
+        self.prepare_focused_defense_kind = kind
         self.game.build(kind)
 
     def start(self, difficulty='normal'):
@@ -153,6 +210,8 @@ class Interface:
         self.tutorial_step = None
         self.selected_defense_kind = 0
         self.prepare_selection_active = False
+        self.prepare_focus_area = None
+        self.prepare_focused_defense_kind = 0
 
     def start_hard(self):
         self.keys.clear()
@@ -161,6 +220,8 @@ class Interface:
         self.tutorial_step = None
         self.selected_defense_kind = 0
         self.prepare_selection_active = False
+        self.prepare_focus_area = None
+        self.prepare_focused_defense_kind = 0
 
     def start_tutorial(self):
         self.keys.clear()
@@ -169,6 +230,8 @@ class Interface:
         self.tutorial_step = 0
         self.selected_defense_kind = 0
         self.prepare_selection_active = False
+        self.prepare_focus_area = None
+        self.prepare_focused_defense_kind = 0
 
     def advance_tutorial(self):
         """Advance the contextual tutorial after a player action."""
@@ -188,7 +251,8 @@ class Interface:
             self.game.message('選擇建造點並建造施工圍牆', 'Select a pad and build a construction wall')
         elif self.tutorial_step == 3 and any(self.game.towers):
             self.tutorial_step = 4
-            self.game.message('教學完成！按 Enter 開始第一波', 'Tutorial complete! Press Enter for Wave 1')
+            self.game.message('教學完成！按 Backspace 開始正式第一波',
+                              'Tutorial complete! Press Backspace for Wave 1')
 
     def start_next_wave(self):
         self.prepare_selection_active = False
@@ -196,8 +260,10 @@ class Interface:
             if self.tutorial_step != 4:
                 self.game.message('請先完成目前的教學步驟', 'Finish the current tutorial step first')
                 return
-            self.game.tutorial_active = False
-            self.tutorial_step = None
+            self.start()
+            self.game.message('教學完成，正式第一波開始',
+                              'Tutorial complete. A fresh game begins at Wave 1')
+            return
         self.game.advance_wave()
 
     def title(self):
@@ -245,14 +311,21 @@ class Interface:
         self.focused_button_index = self.encyclopedia_focus_category
 
     def focus_encyclopedia_profiles(self, direction=0):
-        if self.encyclopedia_focus_category != self.encyclopedia_category:
-            return
+        base_index = (
+            self.encyclopedia_focus_profile
+            if self.encyclopedia_focus_area == 'profile'
+            else self.encyclopedia_index
+        )
         self.encyclopedia_focus_area = 'profile'
         count = len(self.encyclopedia_profiles())
         self.encyclopedia_focus_profile = (
-            self.encyclopedia_index + direction
+            base_index + direction
         ) % count
         self.focused_button_index = 3 + self.encyclopedia_focus_profile
+
+    def focus_encyclopedia_back_button(self):
+        self.encyclopedia_focus_area = 'back'
+        self.focused_button_index = 3 + len(self.encyclopedia_profiles())
 
     def return_focus_to_encyclopedia_category(self):
         self.encyclopedia_focus_area = 'category'
@@ -265,7 +338,7 @@ class Interface:
 
     def cancel_quit(self):
         self.exit_confirmation = False
-        self.focused_button_index = None
+        self.focused_button_index = 0
 
     def confirm_quit(self):
         self.quit_requested = True
@@ -296,38 +369,54 @@ class Interface:
             return
         self.keys.add(key)
         phase = self.game.phase
-        if key == 'tab':
-            shifted = bool(self.keys & {'shift', 'left shift', 'right shift'})
-            self.move_button_focus(-1 if shifted else 1)
-            return
         if self.exit_confirmation:
             if key == 'escape':
                 self.cancel_quit()
             elif key in ('enter', 'space'):
-                self.activate_focused_button()
+                if self.focused_button_index == 0:
+                    self.cancel_quit()
+                else:
+                    self.confirm_quit()
+            elif key in ('up', 'down', 'left', 'right'):
+                step = -1 if key in ('left', 'up') else 1
+                self.focused_button_index = (
+                    (self.focused_button_index or 0) + step
+                ) % 2
+            elif key == 'tab':
+                self.focused_button_index = 1 - (self.focused_button_index or 0)
+            return
+        if key == 'tab':
+            if self.game.phase == 'prepare':
+                self.prepare_focus_area = 'buttons'
+                self.prepare_selection_active = False
+            shifted = bool(self.keys & {'shift', 'left shift', 'right shift'})
+            self.move_button_focus(-1 if shifted else 1)
             return
         if key == 'enter' and self.activate_focused_button():
             return
         if key == 'space' and phase != 'combat' and self.activate_focused_button():
             return
         if phase == 'title':
-            if key in ('enter', 'space'):
-                self.start()
+            if key in ('up', 'down', 'left', 'right'):
+                self.move_title_focus(key)
             elif key == 'h':
                 self.help()
         elif phase == 'help':
             if key == 'escape':
                 self.title()
-            elif key == 'enter':
-                self.start()
         elif phase == 'encyclopedia':
             if key == 'escape':
                 self.close_encyclopedia()
             elif key == 'up':
-                self.return_focus_to_encyclopedia_category()
+                if self.encyclopedia_focus_area == 'back':
+                    self.focus_encyclopedia_profiles()
+                else:
+                    self.return_focus_to_encyclopedia_category()
             elif key == 'down':
                 if self.encyclopedia_focus_area == 'category':
                     self.focus_encyclopedia_profiles()
+                elif self.encyclopedia_focus_area == 'profile':
+                    self.focus_encyclopedia_back_button()
             elif key == 'left':
                 if self.encyclopedia_focus_area == 'category':
                     self.move_encyclopedia_category(-1)
@@ -349,7 +438,9 @@ class Interface:
             elif phase == 'combat' and key == 'space':
                 self.game.manual_attack()
             elif phase == 'prepare':
-                if key == 'up':
+                if key == 'backspace':
+                    self.start_next_wave()
+                elif key == 'up':
                     self.move_defense_selection(-1)
                 elif key == 'down':
                     self.move_defense_selection(1)
@@ -358,10 +449,17 @@ class Interface:
                 elif key == 'right':
                     self.move_pad_selection(1)
                 elif key == 'enter':
-                    if self.prepare_selection_active:
-                        self.build_defense(self.selected_defense_kind)
+                    if self.prepare_focus_area not in ('buttons', None):
+                        self.game.selected_pad = self.prepare_focused_pad
+                        self.build_defense(self.prepare_focused_defense_kind)
+                    elif self.prepare_selection_active:
+                        self.game.selected_pad = self.prepare_focused_pad
+                        self.build_defense(self.prepare_focused_defense_kind)
                     else:
                         self.start_next_wave()
+                elif key == 'space' and self.prepare_focus_area == 'controls':
+                    self.game.selected_pad = self.prepare_focused_pad
+                    self.build_defense(self.prepare_focused_defense_kind)
                 elif key == 'r':
                     self.game.repair()
                 elif key == 'u':
@@ -374,7 +472,9 @@ class Interface:
         elif phase == 'upgrade' and key in ('1', '2', '3'):
             self.game.choose_upgrade(int(key) - 1)
         elif phase == 'pause':
-            if key in ('escape', 'enter'):
+            if key in ('up', 'down', 'left', 'right'):
+                self.move_dialog_focus(key)
+            elif key in ('escape', 'enter'):
                 self.resume()
             elif key == 'r':
                 self.start(self.game.difficulty)
@@ -394,7 +494,22 @@ class Interface:
             button = self.buttons[button_index]
             if inside(x, y, button.bounds):
                 self.focused_button_index = None
+                insufficient_build = False
+                if self.game.phase == 'prepare':
+                    self.prepare_focus_area = 'buttons'
+                    self.prepare_selection_active = False
+                    defense_index = button_index - self.prepare_defense_button_start
+                    if 0 <= defense_index < len(DEFENSES):
+                        cost = DEFENSES[defense_index].cost
+                        pad = self.game.selected_pad
+                        insufficient_build = (
+                            self.game.unlocked_pads[pad]
+                            and self.game.towers[pad] is None
+                            and (self.game.parts < cost[0] or self.game.energy < cost[1])
+                        )
                 button.action()
+                if insufficient_build:
+                    self.focused_button_index = button_index
                 self.advance_tutorial()
                 return
         if self.game.phase == 'combat':
@@ -407,8 +522,14 @@ class Interface:
             for index, (px, py) in enumerate(pad_list):
                 if distance(x, y, px, py) <= 30:
                     self.game.selected_pad = index
-                    self.focused_button_index = None
+                    self.prepare_focused_pad = index
+                    self.prepare_focused_defense_kind = self.selected_defense_kind
+                    self.focused_button_index = (
+                        self.prepare_defense_button_start
+                        + self.prepare_focused_defense_kind
+                    )
                     self.prepare_selection_active = False
+                    self.prepare_focus_area = 'controls'
                     if not self.game.unlocked_pads[index]:
                         self.game.unlock_pad(index)
                     self.advance_tutorial()
@@ -431,17 +552,23 @@ class Interface:
         draw.circle(*BASE, 108, '#1c373a')
         draw.circle(*BASE, 75, '#203e43', outline='#4b7275', width=2)
         draw.image('auditorium_logo', BASE[0] - 60, BASE[1] - 40)
+        self.bar(BASE[0] - 48, BASE[1] - BASE_RADIUS - 14,
+                 96, 8, self.game.base_hp / MAX_BASE_HP, GREEN, border=1)
         self.label(425, 434, '清大大禮堂', 'NTHU AUDITORIUM', 13, '#c8e4e6', 'center')
         pad_list = ALL_PADS if self.game.difficulty == 'hard' else PADS
         for index, (x, y) in enumerate(pad_list):
             tower = self.game.towers[index]
-            selected = self.game.phase == 'prepare' and index == self.game.selected_pad
+            focused_pad = (self.game.phase == 'prepare'
+                           and index == self.prepare_focused_pad)
             unlocked = self.game.unlocked_pads[index]
-            draw.circle(x, y, 26, '#233d45' if unlocked else '#17252b',
-                        outline=BLUE if selected else ('#54727c' if unlocked else '#765d39'), width=2)
+            pad_fill = '#233d45' if unlocked else '#17252b'
+            pad_outline = (GOLD if focused_pad else
+                           '#54727c' if unlocked else '#765d39')
+            draw.circle(x, y, 26, pad_fill, outline=pad_outline,
+                        width=3 if focused_pad else 2)
             if tower is None:
                 if unlocked:
-                    self.text(x, y, str(index + 1), 17, BLUE if selected else MUTED, 'center')
+                    self.text(x, y, str(index + 1), 17, MUTED, 'center')
                 elif self.game.difficulty == 'hard':
                     self.text(x, y - 5, str(index + 1), 13, GOLD, 'center')
                     cost = HARD_PAD_COSTS[index - len(PADS)]
@@ -478,7 +605,24 @@ class Interface:
             elif enemy.slowed:
                 draw.circle(x, y, radius + 4, '#427085', outline=BLUE)
             draw.circle(x, y, radius, '#63323c', outline=kind.color, width=2)
-            sprite_top = draw.sprite(kind.artwork, x, y + (24 if kind.boss else 8))
+            sprite_foot = y + (24 if kind.boss else 8)
+            sprite_top = draw.sprite(kind.artwork, x, sprite_foot)
+            if enemy.stun_duration > 0 and enemy.stun_elapsed < enemy.stun_duration * 1.15:
+                progress = enemy.stun_elapsed / enemy.stun_duration
+                lamp_color = ('#ff3b30' if progress < 0.5 else
+                              '#ffd60a' if progress < 1.0 else '#34c759')
+                lamp_height = max(9, (sprite_foot - sprite_top) * 0.3) * 1.33
+                lamp_width = lamp_height * 0.46
+                lamp_left = x + radius * 0.55
+                lamp_top = sprite_top + 1
+                draw.rect(lamp_left, lamp_top, lamp_width, lamp_height,
+                          '#20252a', outline='#050708', line_width=1)
+                inactive = '#686d72'
+                bulb_radius = lamp_width * 0.27
+                for lamp_index, color in enumerate(('#ff3b30', '#ffd60a', '#34c759')):
+                    center_y = lamp_top + lamp_height * (lamp_index + 0.5) / 3
+                    draw.circle(lamp_left + lamp_width / 2, center_y,
+                                bulb_radius, color if lamp_color == color else inactive)
             if not kind.boss:
                 self.bar(x - 17, sprite_top - 6, 34, 4,
                          enemy.hp / enemy.max_hp, RED, border=1)
@@ -619,8 +763,8 @@ class Interface:
         percent = min(100, round(100 * game.xp / game.next_xp))
         self.label(868, 199, f'等級 {game.level}　經驗 {percent}%',
                    f'Level {game.level}　XP {percent}%', 13, GREEN)
-        instructions = ('上下選塔種，左右選塔位；紫色是塔種、藍色是塔位',
-                        'Up/down: type; left/right: slot. Purple = type; blue = slot')
+        instructions = ('箭頭移動焦點；紫／藍底為目前選取；Enter 建造',
+                        'Arrows move focus; filled = selected; Enter builds')
         self.label(868, 216, *instructions, 11, MUTED)
         tower = game.towers[game.selected_pad]
         pad_status = self.word('空地', 'Empty') if tower is None else self.word(*DEFENSES[tower.kind].name)
@@ -634,15 +778,15 @@ class Interface:
                                    f'Click to unlock {cost[0]}P/{cost[1]}E')
         self.label(868, 237, f'建造點 {game.selected_pad + 1}   {pad_status}',
                    f'Pad {game.selected_pad + 1}   {pad_status}', 15, BLUE)
+        self.prepare_defense_button_start = len(self.buttons)
         for index, defense in enumerate(DEFENSES):
             y = 251 + index * 43
             cost = defense.cost
             zh, en = defense.name
-            selected = index == self.selected_defense_kind
             self.button(868, y, 246, 30, (f'{index + 1}  {zh}   {cost[0]}零件/{cost[1]}能量',
                                            f'{index + 1}  {en}   {cost[0]}P/{cost[1]}E'),
                         lambda kind=index: self.build_defense(kind),
-                        PURPLE if selected else defense.color, selected, size=13)
+                        defense.color, False, size=13, hover_fill=False)
             self.label(878, y + 32, *defense.description, 12, MUTED)
         self.button(868, 480, 246, 35, ('R  修理禮堂   4 零件', 'R  Repair auditorium   4P'), game.repair, size=13)
         next_cost = (UPGRADE_COSTS[tower.upgrade_level - 1]
@@ -652,12 +796,17 @@ class Interface:
                 f'U  升級至 Lv.{tower.upgrade_level + 1}   {next_cost[0]}零件/{next_cost[1]}能量',
                 f'U  Upgrade to Lv.{tower.upgrade_level + 1}   {next_cost[0]}P/{next_cost[1]}E',
             )
+        elif tower is not None and tower.upgrade_level >= 3:
+            upgrade_title = (
+                f'U  已達到最大等級 Lv.{tower.upgrade_level}',
+                f'U  Maximum level reached Lv.{tower.upgrade_level}',
+            )
         else:
             upgrade_title = ('U  升級選取設施', 'U  Upgrade selected defense')
         self.button(868, 523, 246, 35, upgrade_title,
                     game.upgrade_tower, size=13)
-        start_title = ('Enter  開始 Boss 戰', 'Enter  Start boss fight') if game.boss_preparation else (
-            'Enter  開始下一波', 'Enter  Start next wave'
+        start_title = ('Backspace  開始 Boss 戰', 'Backspace  Start boss fight') if game.boss_preparation else (
+            'Backspace  開始下一波', 'Backspace  Start next wave'
         )
         self.button(868, 585, 246, 43, start_title, self.start_next_wave,
                     GREEN, True, size=14)
@@ -674,14 +823,14 @@ class Interface:
         self.label(576, 369, '大禮堂防衛戰', 'Auditorium Defense', 42, TEXT, 'center')
         self.label(576, 413, '普通模式五波；困難模式八波並迎戰兩次 Boss。',
                    'Normal: 5 waves. Hard: 8 waves and two boss fights.', 16, MUTED, 'center')
-        self.button(350, 438, 202, 48, ('Enter  普通模式', 'Enter  Normal'), self.start, BLUE, True)
+        self.button(350, 438, 202, 48, ('普通模式', 'Normal'), self.start, BLUE, True)
         self.button(600, 438, 202, 48, ('困難模式', 'Hard mode'), self.start_hard, RED, True)
         self.button(326, 494, 154, 32, ('H  操作說明', 'H  Controls'), self.help, size=12)
         self.button(499, 494, 154, 32, ('手把手教學', 'Guided tutorial'),
                     self.start_tutorial, GREEN, size=12)
         self.button(672, 494, 154, 32, ('圖鑑', 'Encyclopedia'),
                     self.open_encyclopedia, BLUE, size=12)
-        self.poweroff_button(1070, 29, 42, 42)
+        self.poweroff_button(796, 178, 36, 36)
 
     def draw_help(self):
         self.overlay(176, 119, 800, 492)
@@ -698,9 +847,7 @@ class Interface:
         )
         for index, row in enumerate(rows):
             self.label(210, 216 + index * 43, *row, 15, MUTED)
-        self.button(252, 548, 200, 42, ('Enter  開始遊戲', 'Enter  Start game'), self.start, BLUE, True)
-        self.button(476, 548, 200, 42, ('手把手教學', 'Guided tutorial'), self.start_tutorial, GREEN)
-        self.button(700, 548, 200, 42, ('主畫面', 'Main screen'), self.title)
+        self.button(476, 548, 200, 42, ('返回主界面', 'Back to main screen'), self.title)
 
     @staticmethod
     def relative_range(pixels):
@@ -716,15 +863,15 @@ class Interface:
                     ('生命值', 'Health', f'{self.game.max_player_hp} HP', f'{self.game.max_player_hp} HP'),
                     ('移動速度', 'Move speed', f'{self.game.player_speed} /秒', f'{self.game.player_speed} /s'),
                     ('自動遠程傷害', 'Auto ranged damage', str(damage), str(damage)),
-                    ('自動遠程射程', 'Auto ranged range', str(self.relative_range(PLAYER_RANGED_RANGE)),
+                    ('射程', 'Range', str(self.relative_range(PLAYER_RANGED_RANGE)),
                      str(self.relative_range(PLAYER_RANGED_RANGE))),
                     ('自動攻擊間隔', 'Auto attack interval', f'{PLAYER_RANGED_INTERVAL:.2f} 秒',
                      f'{PLAYER_RANGED_INTERVAL:.2f} s'),
                     ('索敵模式', 'Targeting', '遠程鎖定最近；近戰命中範圍內全部',
                      'Ranged targets nearest; melee hits all nearby'),
                     ('手動近戰', 'Manual melee',
-                     f'{melee_damage} 傷害 / 射程 {self.relative_range(PLAYER_MELEE_RANGE)}',
-                     f'{melee_damage} damage / range {self.relative_range(PLAYER_MELEE_RANGE)}'),
+                     f'{melee_damage} 傷害 / 射程：{self.relative_range(PLAYER_MELEE_RANGE)}',
+                     f'{melee_damage} damage / Range: {self.relative_range(PLAYER_MELEE_RANGE)}'),
                     ('近戰冷卻', 'Melee cooldown', f'{PLAYER_MELEE_COOLDOWN:.2f} 秒',
                      f'{PLAYER_MELEE_COOLDOWN:.2f} s'),
                 ),
@@ -758,7 +905,7 @@ class Interface:
                             special_zh, special_en = '近戰攻擊', 'Melee attacker'
 
                 attack_range = self.relative_range(kind.attack_range) if kind.ranged else None
-                range_zh = f'{attack_range} 相對距離' if attack_range is not None else '接觸距離'
+                range_zh = str(attack_range) if attack_range is not None else '接觸'
                 range_en = str(attack_range) if attack_range is not None else 'Contact'
                 if kind.targets_player:
                     damage_zh = f'玩家 {kind.player_damage}'
@@ -770,7 +917,7 @@ class Interface:
                     ('生命值', 'Health', health, health_en),
                     ('移動速度', 'Move speed', f'{kind.speed} /秒', f'{kind.speed} /s'),
                     ('攻擊傷害', 'Attack damage', damage_zh, damage_en),
-                    ('攻擊射程', 'Attack range', range_zh, range_en),
+                    ('射程', 'Range', range_zh, range_en),
                     ('攻擊間隔', 'Attack interval', f'{kind.attack_interval:g} 秒',
                      f'{kind.attack_interval:g} s'),
                     ('索敵模式', 'Targeting', target_zh, target_en),
@@ -784,7 +931,7 @@ class Interface:
         profiles = []
         for defense in DEFENSES:
             attack_range = self.relative_range(defense.reach) if defense.reach else None
-            range_zh = f'{attack_range} 相對距離' if attack_range is not None else '路線阻擋'
+            range_zh = str(attack_range) if attack_range is not None else '阻擋路線'
             range_en = str(attack_range) if attack_range is not None else 'Blocks a route'
             if defense.mode == 'stun':
                 damage_zh, damage_en = '傷害 0；範圍暈眩', '0 damage; area stun'
@@ -821,7 +968,7 @@ class Interface:
             cost_en = f'{defense.cost[0]} parts / {defense.cost[1]} energy'
             profiles.append((defense.name[0], defense.name[1], defense.artwork, (
                 ('耐久', 'Durability', durability_zh, durability_en),
-                ('攻擊射程', 'Attack range', range_zh, range_en),
+                ('射程', 'Range', range_zh, range_en),
                 ('攻擊傷害', 'Attack damage', damage_zh, damage_en),
                 ('攻擊間隔', 'Attack interval', interval_zh, interval_en),
                 ('索敵模式', 'Targeting', targeting_zh, targeting_en),
@@ -872,14 +1019,6 @@ class Interface:
             value_size = 12 if index == len(rows) - 1 else 14
             self.label(value_x, y, value_zh, value_en, value_size, TEXT)
 
-        self.label(360, 570,
-                   '射程採相對尺度：5 的倍數，最大 200；數值用來比較距離。',
-                   'Ranges use a relative scale in steps of 5, capped at 200.',
-                   12, MUTED)
-        self.button(114, 614, 44, 34, ('‹', '‹'),
-                    lambda: self.move_encyclopedia_selection(-1), BLUE, size=18)
-        self.button(207, 614, 44, 34, ('›', '›'),
-                    lambda: self.move_encyclopedia_selection(1), BLUE, size=18)
         self.label(182, 631, '←→移動；↑回分類、↓進項目',
                    '←→ move; ↑ category, ↓ items', 11, MUTED, 'center')
         self.button(870, 608, 164, 42, ('返回', 'Back'),
@@ -893,7 +1032,8 @@ class Interface:
             ('第 2 步：靠近熊，按 Space 或點擊場地施展近戰。', 'Step 2: Approach the bear, then press Space or click to melee.'),
             ('第 3 步：走到金色方塊上收集零件。', 'Step 3: Walk over the gold square to collect parts.'),
             ('第 4 步：選空建造點，按 2 或點選「施工圍牆」。', 'Step 4: Select an empty pad, then press 2 or choose Construction wall.'),
-            ('完成！按 Enter 開始正式的第一波。', 'Complete! Press Enter to begin the real first wave.'),
+            ('完成！按 Backspace 重置並開始正式第一波。',
+             'Complete! Press Backspace to reset and begin Wave 1.'),
         )
         chinese, english = prompts[self.tutorial_step]
         self.canvas.rect(42, 604, 768, 43, '#183b46', outline=GREEN, line_width=2)
@@ -937,9 +1077,21 @@ class Interface:
     def draw(self):
         game = self.game
         if self.drawn_phase != game.phase:
-            self.focused_button_index = None
+            if game.phase == 'prepare':
+                self.prepare_focus_area = 'controls'
+                self.prepare_focused_pad = game.selected_pad
+                self.prepare_focused_defense_kind = self.selected_defense_kind
+                self.prepare_selection_active = False
+                self.focused_button_index = (
+                    self.prepare_defense_button_start + self.selected_defense_kind
+                )
+            else:
+                self.focused_button_index = 0 if game.phase in ('title', 'pause') else None
         self.drawn_phase = game.phase
         self.buttons.clear()
+        pause_menu_focus = self.focused_button_index if game.phase == 'pause' else None
+        if game.phase == 'pause':
+            self.focused_button_index = None
         self.canvas.clear(BG)
         self.draw_field()
         self.draw_entities()
@@ -953,8 +1105,16 @@ class Interface:
         elif game.phase in ('combat', 'prepare'):
             self.label(23, 690, '藍圈是守衛；敵人外觀表示種類，金圈表示暈眩。',
                        'Blue ring marks the defender; sprites show enemy types, gold means stunned.', 14, MUTED)
+        if game.phase == 'pause':
+            self.focused_button_index = pause_menu_focus
         if game.phase == 'title':
-            self.draw_title()
+            if self.exit_confirmation:
+                modal_focus = self.focused_button_index
+                self.focused_button_index = None
+                self.draw_title()
+                self.focused_button_index = modal_focus
+            else:
+                self.draw_title()
         elif game.phase == 'help':
             self.draw_help()
         elif game.phase == 'encyclopedia':

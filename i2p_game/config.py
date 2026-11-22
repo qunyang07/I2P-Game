@@ -83,7 +83,7 @@ ENEMY_KINDS = (
               xp_reward=24),
     EnemyKind(('奶龍', 'Nailong'), 'nailong', 72, 84, 8, 20, 13, GOLD, 0.85,
               targets_player=True, xp_reward=25),
-    EnemyKind(('最終 Boss', 'Final boss'), 'boss', 1250, 24, 24, 25, 31, RED, 1.15,
+    EnemyKind(('tung tung tung sahur', 'tung tung tung sahur'), 'boss', 1250, 24, 24, 25, 31, RED, 1.15,
               boss=True, xp_reward=60),
 )
 BOSS_KIND = 4
