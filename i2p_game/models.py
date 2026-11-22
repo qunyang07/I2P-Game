@@ -18,6 +18,7 @@ class Enemy:
     wall_wait: float = 0.0
     dash_wait: float = 0.0
     dash_left: float = 0.0
+    knockback_effect: float = 0.0
 
 
 @dataclass

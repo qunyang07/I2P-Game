@@ -21,6 +21,8 @@ ARTWORK_FILES = {
     "wall": NEW_IMAGE_DIR / "Wall.jpg",
     "lake": NEW_IMAGE_DIR / "Lake.png",
     "dog": NEW_IMAGE_DIR / "dog.png",
+    "bark": NEW_IMAGE_DIR / "bark.png",
+    "exclamation_mark": NEW_IMAGE_DIR / "exclamation_mark.png",
     "egg_launcher": NEW_IMAGE_DIR / "naiEgg_launcher.png",
     "egg": NEW_IMAGE_DIR / "naiEgg.png",
 }
@@ -40,6 +42,8 @@ SPRITE_SIZES = {
     "wall": (68, 52),
     "lake": (64, 42),
     "dog": (42, 50),
+    "bark": (34, 34),
+    "exclamation_mark": (22, 22),
     "egg_launcher": (52, 46),
     "egg": (19, 21),
 }

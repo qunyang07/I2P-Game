@@ -27,8 +27,14 @@ KEY_NAMES = {
 SCANCODE_MOVEMENT_KEYS = {26: 'w', 4: 'a', 22: 's', 7: 'd'}
 SCANCODE_SHORTCUT_KEYS = {
     **SCANCODE_MOVEMENT_KEYS,
+    44: 'space',
     11: 'h', 20: 'q', 21: 'r', 24: 'u',
 }
+WINDOWS_PHYSICAL_VKS = {
+    'w': 0x57, 'a': 0x41, 's': 0x53, 'd': 0x44, 'space': 0x20,
+}
+_windows_get_async_key_state = None
+_windows_key_state_loaded = False
 
 # Taiwan Zhuyin keyboard positions for letter shortcuts. Keep the UI labels in
 # Latin letters while accepting the symbol emitted by a Chinese IME.
@@ -45,6 +51,26 @@ ZHUYIN_KEY_NAMES = {
 def normalize_key(name):
     name = name.lower()
     return KEY_NAMES.get(name, ZHUYIN_KEY_NAMES.get(name, name))
+
+
+def windows_pressed_physical_keys():
+    """Read physical key state even when a Windows IME translates key text."""
+    global _windows_get_async_key_state, _windows_key_state_loaded
+    if os.name != 'nt':
+        return set()
+    if not _windows_key_state_loaded:
+        _windows_key_state_loaded = True
+        try:
+            import ctypes
+            _windows_get_async_key_state = ctypes.windll.user32.GetAsyncKeyState
+        except (AttributeError, OSError):
+            _windows_get_async_key_state = None
+    if _windows_get_async_key_state is None:
+        return set()
+    return {
+        name for name, virtual_key in WINDOWS_PHYSICAL_VKS.items()
+        if _windows_get_async_key_state(virtual_key) & 0x8000
+    }
 
 
 def bounded_window_size(width, height, display_width=None, display_height=None):
@@ -79,6 +105,7 @@ def run_pygame(pygame):
         pygame.display.set_caption('大禮堂防衛戰 | Auditorium Defense')
         clock = pygame.time.Clock()
         interface = Interface(PygameCanvas(pygame, screen))
+        windows_keys = set()
         while True:
             dt = clock.tick(60) / 1000
             for event in pygame.event.get():
@@ -119,6 +146,12 @@ def run_pygame(pygame):
                     interface.focus_gained()
             if interface.quit_requested:
                 return
+            current_windows_keys = windows_pressed_physical_keys()
+            if 'space' in current_windows_keys - windows_keys:
+                interface.key_down('space')
+            if 'space' in windows_keys - current_windows_keys:
+                interface.key_up('space')
+            windows_keys = current_windows_keys
             scale = interface.canvas.display_scale()
             mouse_x, mouse_y = pygame.mouse.get_pos()
             interface.pointer = mouse_x / scale, mouse_y / scale
@@ -132,6 +165,7 @@ def run_pygame(pygame):
                 movement_keys.add('w')
             if pressed[pygame.K_s]:
                 movement_keys.add('s')
+            movement_keys.update(current_windows_keys & {'w', 'a', 's', 'd'})
             interface.tick(dt, movement_keys)
             interface.draw()
             interface.canvas.present()

@@ -39,6 +39,9 @@ PLAYER_MELEE_COOLDOWN = 1.05
 PLAYER_MELEE_FLASH_DURATION = 0.22
 PLAYER_RANGED_RANGE = 153
 PLAYER_RANGED_INTERVAL = 0.37
+DOG_KNOCKBACK_DISTANCE = 68
+DOG_EFFECT_DURATION = 0.38
+DOG_KNOCKBACK_EFFECT_DURATION = 0.55
 EGG_PROJECTILE_SPEED = 420
 
 BG = '#0c1621'
@@ -89,6 +92,7 @@ ENEMY_KINDS = (
 BOSS_KIND = 4
 BOSS_WAVE = 4
 BOSS_PHASE_COUNT = 3
+BOSS_PHASE_SPEED_MULTIPLIERS = (1.0, 1.2, 1.35)
 FIELD2_START_WAVE = 3
 
 WAVES = (
@@ -133,12 +137,12 @@ DEFENSES = (
                 (6, 3), 220, 0, 6.0, GREEN, 'traffic_light', 'stun', stun_duration=1.7),
     DefenseKind(('施工圍牆', 'Construction wall'), ('便宜、脆弱，可阻擋路線', 'Cheap, fragile path blocker'),
                 (2, 0), 0, 0, 0.0, MUTED, 'wall', 'wall', durability=88),
-    DefenseKind(('小湖', 'Small lake'), ('淹沒單一敵人，冷卻較久', 'Drowns one enemy; long cooldown'),
+    DefenseKind(('成功湖', 'Cheng Kung Lake'), ('淹沒單一敵人，冷卻較久', 'Drowns one enemy; long cooldown'),
                 (5, 2), 66, 0, 6.5, BLUE, 'lake', 'trap'),
-    DefenseKind(('校狗', 'Campus dog'), ('近距離快速攻擊', 'Fast close-range attack'),
-                (6, 2), 98, 22, 0.72, GOLD, 'dog', 'shot'),
+    DefenseKind(('牛排', 'Steak'), ('範圍吠叫攻擊並擊退敵人', 'Barks to damage and knock back nearby enemies'),
+                (6, 2), 140, 15, 2.0, GOLD, 'dog', 'dog'),
     DefenseKind(('奶蛋發射器', 'Egg launcher'), ('遠程蛋彈，可波及附近敵人', 'Long-range egg with splash damage'),
-                (8, 4), 300, 34, 1.25, PURPLE, 'egg_launcher', 'egg', splash_radius=38),
+                (8, 4), 200, 34, 1.25, PURPLE, 'egg_launcher', 'egg', splash_radius=38),
 )
 
 UPGRADES = (

@@ -169,6 +169,7 @@ class Interface:
     def move_pad_selection(self, direction=1):
         count = len(ALL_PADS) if self.game.difficulty == 'hard' else len(PADS)
         self.prepare_focused_pad = (self.prepare_focused_pad + direction) % count
+        self.game.selected_pad = self.prepare_focused_pad
         self.prepare_focus_area = 'controls'
         self.prepare_selection_active = True
         if self.focused_button_index is None:
@@ -198,6 +199,7 @@ class Interface:
             self.prepare_selection_active = False
 
     def build_defense(self, kind):
+        self.game.selected_pad = self.prepare_focused_pad
         self.selected_defense_kind = kind
         self.prepare_selection_active = False
         self.prepare_focused_defense_kind = kind
@@ -496,6 +498,7 @@ class Interface:
                 self.focused_button_index = None
                 insufficient_build = False
                 if self.game.phase == 'prepare':
+                    self.game.selected_pad = self.prepare_focused_pad
                     self.prepare_focus_area = 'buttons'
                     self.prepare_selection_active = False
                     defense_index = button_index - self.prepare_defense_button_start
@@ -566,6 +569,13 @@ class Interface:
                            '#54727c' if unlocked else '#765d39')
             draw.circle(x, y, 26, pad_fill, outline=pad_outline,
                         width=3 if focused_pad else 2)
+            if focused_pad and tower is not None:
+                defense = DEFENSES[tower.kind]
+                if defense.reach > 0:
+                    reach = (defense.reach
+                             + (22 if tower.upgrade_level >= 2 else 0)
+                             + (18 if tower.upgrade_level >= 3 else 0))
+                    draw.circle(x, y, reach, None, outline='#ffffff', width=1)
             if tower is None:
                 if unlocked:
                     self.text(x, y, str(index + 1), 17, MUTED, 'center')
@@ -587,6 +597,8 @@ class Interface:
                     draw.circle(x, y, 36, None, outline=defense.color, width=2)
                 elif tower.effect > 0 and defense.mode == 'trap':
                     draw.circle(x, y, 34, None, outline=defense.color, width=2)
+                elif tower.effect > 0 and defense.mode == 'dog':
+                    draw.image('bark', x - 17, y - 55)
 
     def draw_entities(self):
         draw, game = self.canvas, self.game
@@ -607,6 +619,10 @@ class Interface:
             draw.circle(x, y, radius, '#63323c', outline=kind.color, width=2)
             sprite_foot = y + (24 if kind.boss else 8)
             sprite_top = draw.sprite(kind.artwork, x, sprite_foot)
+            if enemy.knockback_effect > 0:
+                icon_x = (x - radius - 25 if x > BASE[0]
+                          else x + radius + 3)
+                draw.image('exclamation_mark', icon_x, y - radius - 11)
             if enemy.stun_duration > 0 and enemy.stun_elapsed < enemy.stun_duration * 1.15:
                 progress = enemy.stun_elapsed / enemy.stun_duration
                 lamp_color = ('#ff3b30' if progress < 0.5 else
@@ -766,18 +782,19 @@ class Interface:
         instructions = ('箭頭移動焦點；紫／藍底為目前選取；Enter 建造',
                         'Arrows move focus; filled = selected; Enter builds')
         self.label(868, 216, *instructions, 11, MUTED)
-        tower = game.towers[game.selected_pad]
+        pad_index = self.prepare_focused_pad
+        tower = game.towers[pad_index]
         pad_status = self.word('空地', 'Empty') if tower is None else self.word(*DEFENSES[tower.kind].name)
         if tower is not None:
             pad_status += f' Lv.{tower.upgrade_level}'
             if tower.locked:
                 pad_status += self.word('（已鎖定）', ' (Locked)')
-        elif not game.unlocked_pads[game.selected_pad]:
-            cost = HARD_PAD_COSTS[game.selected_pad - len(PADS)]
+        elif not game.unlocked_pads[pad_index]:
+            cost = HARD_PAD_COSTS[pad_index - len(PADS)]
             pad_status = self.word(f'點擊解鎖 {cost[0]}零件/{cost[1]}能量',
                                    f'Click to unlock {cost[0]}P/{cost[1]}E')
-        self.label(868, 237, f'建造點 {game.selected_pad + 1}   {pad_status}',
-                   f'Pad {game.selected_pad + 1}   {pad_status}', 15, BLUE)
+        self.label(868, 237, f'建造點 {pad_index + 1}   {pad_status}',
+                   f'Pad {pad_index + 1}   {pad_status}', 15, BLUE)
         self.prepare_defense_button_start = len(self.buttons)
         for index, defense in enumerate(DEFENSES):
             y = 251 + index * 43
@@ -788,7 +805,9 @@ class Interface:
                         lambda kind=index: self.build_defense(kind),
                         defense.color, False, size=13, hover_fill=False)
             self.label(878, y + 32, *defense.description, 12, MUTED)
-        self.button(868, 480, 246, 35, ('R  修理禮堂   4 零件', 'R  Repair auditorium   4P'), game.repair, size=13)
+        self.button(868, 480, 246, 35,
+                    ('R  修理禮堂   4 零件', 'R  Repair auditorium   4P'),
+                    game.repair, GOLD, True, size=13)
         next_cost = (UPGRADE_COSTS[tower.upgrade_level - 1]
                      if tower is not None and tower.upgrade_level < 3 else None)
         if next_cost:
@@ -804,7 +823,7 @@ class Interface:
         else:
             upgrade_title = ('U  升級選取設施', 'U  Upgrade selected defense')
         self.button(868, 523, 246, 35, upgrade_title,
-                    game.upgrade_tower, size=13)
+                    game.upgrade_tower, BLUE, True, size=13)
         start_title = ('Backspace  開始 Boss 戰', 'Backspace  Start boss fight') if game.boss_preparation else (
             'Backspace  開始下一波', 'Backspace  Start next wave'
         )
@@ -839,8 +858,8 @@ class Interface:
             ('Tab / Shift+Tab 切換按鈕，Enter 選取；WASD 移動，備戰時方向鍵選塔種與塔位。', 'Tab / Shift+Tab focus buttons; Enter selects. WASD moves; arrows choose type and slot in prep.'),
             ('附近敵人會被自動攻擊；金色是零件，紫色是能量，走近即可拾取。', 'Nearby enemies are attacked automatically. Gold is parts; purple is energy.'),
             ('備戰時上下選塔種、左右選塔位；按 Enter 或 1–5 建造。', 'In prep, up/down choose type; left/right choose slot. Enter or 1–5 builds.'),
-            ('紅綠燈暈眩群敵；圍牆擋路但會被打壞；小湖淹一隻敵人。', 'Traffic light stuns groups; walls block and break; lakes drown one enemy.'),
-            ('校狗近攻；奶蛋發射器遠攻並波及附近敵人。R 修禮堂，U 升級設施。', 'Dog attacks nearby; egg launcher fires far and splashes. R repairs; U upgrades.'),
+            ('紅綠燈暈眩群敵；圍牆擋路但會被打壞；成功湖淹一隻敵人。', 'Traffic light stuns groups; walls block and break; Cheng Kung Lake drowns one enemy.'),
+            ('牛排範圍攻擊並擊退敵人；奶蛋發射器遠攻並波及附近敵人。R 修禮堂，U 升級設施。', 'Steak attacks and knocks back nearby enemies; egg launcher fires far and splashes. R repairs; U upgrades.'),
             ('熊耐打近攻；小熊會衝刺；牛來會遠距攻擊。', 'Bear is tough and melee; small bears dash; Niulai attacks at range.'),
             ('奶龍血量中等、移動快，會追擊玩家並造成中高傷害；第二波開始出現。', 'Nailong has medium health, moves fast, and chases the player with hard-hitting attacks. It joins from Wave 2.'),
             ('守住禮堂並擊敗 Boss 獲勝；玩家或禮堂生命歸零則失敗。', 'Defeat the boss while keeping both HP bars above zero to win.'),
@@ -886,7 +905,8 @@ class Interface:
                     health = f'{phase_hp} × {BOSS_PHASE_COUNT} 階'
                     health_en = f'{phase_hp} × {BOSS_PHASE_COUNT} phases'
                     target_zh, target_en = '朝基地前進', 'Advances toward the base'
-                    special_zh, special_en = '三階段，左右交替重現', 'Three phases; alternates sides'
+                    special_zh = '三階段，左右交替重現；第2/3階段速度 ×1.2/×1.35'
+                    special_en = 'Three phases; alternates sides; phases 2/3 speed ×1.2/×1.35'
                 else:
                     health = f'{kind.hp} HP'
                     health_en = f'{kind.hp} HP'
@@ -948,6 +968,12 @@ class Interface:
                 targeting_zh, targeting_en = '射程內最近敵人', 'Nearest enemy in range'
                 special_zh = 'Lv.2/3 射程 +10/+20、冷卻 -20%/-35%'
                 special_en = 'Lv2/3 range +10/+20, cooldown -20%/-35%'
+            elif defense.mode == 'dog':
+                damage_zh = f'{defense.damage}/{defense.damage * 3 // 2}/{defense.damage * 2}'
+                damage_en = f'{defense.damage}/{defense.damage * 3 // 2}/{defense.damage * 2}'
+                targeting_zh, targeting_en = '範圍內所有敵人', 'All enemies in range'
+                special_zh = '擊退力 68/80/92（Boss 減半）；Lv.2/3 射程 +10/+20、冷卻 -20%/-35%'
+                special_en = 'Knockback 68/80/92; half vs. bosses; Lv2/3 range +10/+20, cooldown -20%/-35%'
             elif defense.mode == 'egg':
                 damage_zh = f'{defense.damage}/{defense.damage * 3 // 2}/{defense.damage * 2} 單體'
                 damage_en = f'{defense.damage}/{defense.damage * 3 // 2}/{defense.damage * 2} direct'
@@ -1028,7 +1054,7 @@ class Interface:
         if not self.game.tutorial_active:
             return
         prompts = (
-            ('第 1 步：按方向鍵或 WASD 走一步。', 'Step 1: Press an arrow key or WASD to move.'),
+            ('第 1 步：按 WASD 走一步。', 'Step 1: Move with WASD.'),
             ('第 2 步：靠近熊，按 Space 或點擊場地施展近戰。', 'Step 2: Approach the bear, then press Space or click to melee.'),
             ('第 3 步：走到金色方塊上收集零件。', 'Step 3: Walk over the gold square to collect parts.'),
             ('第 4 步：選空建造點，按 2 或點選「施工圍牆」。', 'Step 4: Select an empty pad, then press 2 or choose Construction wall.'),

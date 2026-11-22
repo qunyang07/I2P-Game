@@ -5,7 +5,10 @@ from math import hypot
 
 from .config import (
     ALL_PADS, BASE, BASE_RADIUS, BLUE, BOSS_ENTRANCE, BOSS_KIND, BOSS_PHASE_COUNT,
-    BOSS_WAVE, DEFENSES, EGG_PROJECTILE_SPEED, ENEMY_KINDS, ENTRANCES,
+    BOSS_PHASE_SPEED_MULTIPLIERS,
+    BOSS_WAVE, DEFENSES, DOG_EFFECT_DURATION, DOG_KNOCKBACK_DISTANCE,
+    DOG_KNOCKBACK_EFFECT_DURATION,
+    EGG_PROJECTILE_SPEED, ENEMY_KINDS, ENTRANCES,
     FIELD, HARD_PAD_COSTS, HARD_SPAWN_INTERVALS, HARD_WAVES, MAX_BASE_HP,
     PADS, PLAYER_MELEE_COOLDOWN,
     PLAYER_MELEE_FLASH_DURATION, PLAYER_MELEE_RANGE, PLAYER_RANGED_INTERVAL,
@@ -338,6 +341,9 @@ class Game:
         speed = kind.speed * (1 + 0.08 * self.wave)
         if self.difficulty == 'hard':
             speed *= 1.2
+        if kind.boss:
+            phase_index = min(self.boss_phase, len(BOSS_PHASE_SPEED_MULTIPLIERS) - 1)
+            speed *= BOSS_PHASE_SPEED_MULTIPLIERS[phase_index]
         if enemy.slowed:
             speed *= 0.54
         if enemy.dash_left > 0:
@@ -473,6 +479,41 @@ class Game:
 
             level = tower.upgrade_level
             reach = defense.reach + (22 if level >= 2 else 0) + (18 if level >= 3 else 0)
+            if defense.mode == 'dog':
+                targets = [
+                    enemy for enemy in self.enemies
+                    if enemy.hp > 0
+                    and distance(*pad, enemy.x, enemy.y)
+                    <= reach + ENEMY_KINDS[enemy.kind].radius
+                ]
+                if not targets:
+                    continue
+
+                damage = (defense.damage * 2 if level >= 3 else
+                          defense.damage * 3 // 2 if level == 2 else defense.damage)
+                knockback = DOG_KNOCKBACK_DISTANCE + (12 if level >= 2 else 0) + (12 if level >= 3 else 0)
+                for enemy in targets:
+                    enemy.hp -= damage
+                    enemy.knockback_effect = DOG_KNOCKBACK_EFFECT_DURATION
+                    enemy_knockback = (knockback * 0.5
+                                       if ENEMY_KINDS[enemy.kind].boss else knockback)
+                    dx, dy = enemy.x - pad[0], enemy.y - pad[1]
+                    length = hypot(dx, dy)
+                    if length < 1:
+                        dx, dy = enemy.x - BASE[0], enemy.y - BASE[1]
+                        length = hypot(dx, dy)
+                    if length < 1:
+                        dx, dy, length = 0, -1, 1
+                    enemy_radius = ENEMY_KINDS[enemy.kind].radius
+                    min_x, max_x = FIELD[0] + enemy_radius, FIELD[0] + FIELD[2] - enemy_radius
+                    min_y, max_y = FIELD[1] + enemy_radius, FIELD[1] + FIELD[3] - enemy_radius
+                    enemy.x = min(max_x, max(min_x, enemy.x + dx / length * enemy_knockback))
+                    enemy.y = min(max_y, max(min_y, enemy.y + dy / length * enemy_knockback))
+
+                tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
+                tower.effect = DOG_EFFECT_DURATION
+                continue
+
             if defense.mode == 'stun':
                 targets = [
                     enemy for enemy in self.enemies
@@ -610,6 +651,8 @@ class Game:
         dt *= time_scale
         if self.phase not in ('combat', 'prepare'):
             return
+        for enemy in self.enemies:
+            enemy.knockback_effect = max(0.0, enemy.knockback_effect - dt)
         self.notice_left = max(0.0, self.notice_left - dt)
         self.melee_wait = max(0.0, self.melee_wait - dt)
         self.melee_flash = max(0.0, self.melee_flash - dt)
