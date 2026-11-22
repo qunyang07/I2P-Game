@@ -117,18 +117,20 @@ def run_pygame(pygame):
                     interface.focus_lost()
                 elif event.type == pygame.WINDOWFOCUSGAINED:
                     interface.focus_gained()
+            if interface.quit_requested:
+                return
             scale = interface.canvas.display_scale()
             mouse_x, mouse_y = pygame.mouse.get_pos()
             interface.pointer = mouse_x / scale, mouse_y / scale
             pressed = pygame.key.get_pressed()
             movement_keys = set()
-            if pressed[pygame.K_a] or pressed[pygame.K_LEFT]:
+            if pressed[pygame.K_a]:
                 movement_keys.add('a')
-            if pressed[pygame.K_d] or pressed[pygame.K_RIGHT]:
+            if pressed[pygame.K_d]:
                 movement_keys.add('d')
-            if pressed[pygame.K_w] or pressed[pygame.K_UP]:
+            if pressed[pygame.K_w]:
                 movement_keys.add('w')
-            if pressed[pygame.K_s] or pressed[pygame.K_DOWN]:
+            if pressed[pygame.K_s]:
                 movement_keys.add('s')
             interface.tick(dt, movement_keys)
             interface.draw()
@@ -162,6 +164,9 @@ def run_tkinter():
         now = perf_counter()
         interface.tick(now - previous)
         interface.draw()
+        if interface.quit_requested:
+            root.destroy()
+            return
         previous = now
         root.after(16, frame)
 
