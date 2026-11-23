@@ -20,6 +20,10 @@ class Interface:
         self.canvas = canvas
         self.game = Game()
         self.keys = set()
+        self.focus_hold_elapsed = {}
+        self.focus_repeat_elapsed = {}
+        self.focus_repeat_delay = 0.455
+        self.focus_repeat_interval = 0.10
         self.buttons = []
         self.focused_button_index = None
         self.selected_defense_kind = 0
@@ -213,6 +217,8 @@ class Interface:
 
     def start(self, difficulty='normal'):
         self.keys.clear()
+        self.focus_hold_elapsed.clear()
+        self.focus_repeat_elapsed.clear()
         self.focus_paused = False
         self.game.reset(difficulty)
         self.tutorial_step = None
@@ -363,6 +369,8 @@ class Interface:
             self.game.phase = 'pause'
             self.focus_paused = True
         self.keys.clear()
+        self.focus_hold_elapsed.clear()
+        self.focus_repeat_elapsed.clear()
 
     def resume(self):
         self.game.phase = self.before_pause
@@ -376,7 +384,12 @@ class Interface:
         if key in self.keys:
             return
         self.keys.add(key)
+        if key in ('shift', 'left shift', 'right shift'):
+            self.reset_focus_repeat_delay()
         phase = self.game.phase
+        if self.is_focus_repeat_key(key):
+            self.focus_hold_elapsed[key] = 0.0
+            self.focus_repeat_elapsed[key] = 0.0
         if self.exit_confirmation:
             if key == 'escape':
                 self.cancel_quit()
@@ -492,6 +505,103 @@ class Interface:
 
     def key_up(self, key):
         self.keys.discard(key)
+        self.focus_hold_elapsed.pop(key, None)
+        self.focus_repeat_elapsed.pop(key, None)
+        if key in ('shift', 'left shift', 'right shift'):
+            self.reset_focus_repeat_delay()
+
+    def reset_focus_repeat_delay(self):
+        for key in self.keys & {'tab', 'up', 'down', 'left', 'right'}:
+            if key in self.focus_hold_elapsed:
+                self.focus_hold_elapsed[key] = 0.0
+                self.focus_repeat_elapsed[key] = 0.0
+
+    def is_focus_repeat_key(self, key):
+        if key == 'tab':
+            return True
+        if key not in ('up', 'down', 'left', 'right'):
+            return False
+        return self.exit_confirmation or self.game.phase in (
+            'title', 'encyclopedia', 'prepare', 'pause'
+        )
+
+    def repeat_focus_navigation(self, key):
+        if self.exit_confirmation:
+            if key in ('up', 'down', 'left', 'right'):
+                step = -1 if key in ('left', 'up') else 1
+                self.focused_button_index = (
+                    (self.focused_button_index or 0) + step
+                ) % 2
+            elif key == 'tab':
+                self.focused_button_index = 1 - (self.focused_button_index or 0)
+            return
+        if key == 'tab':
+            if self.game.phase == 'prepare':
+                self.prepare_focus_area = 'buttons'
+                self.prepare_selection_active = False
+            shifted = bool(self.keys & {'shift', 'left shift', 'right shift'})
+            self.move_button_focus(-1 if shifted else 1)
+        elif self.game.phase == 'title':
+            self.move_title_focus(key)
+        elif self.game.phase == 'encyclopedia':
+            if key == 'up':
+                if self.encyclopedia_focus_area == 'back':
+                    self.focus_encyclopedia_profiles()
+                else:
+                    self.return_focus_to_encyclopedia_category()
+            elif key == 'down':
+                if self.encyclopedia_focus_area == 'category':
+                    self.focus_encyclopedia_profiles()
+                elif self.encyclopedia_focus_area == 'profile':
+                    self.focus_encyclopedia_back_button()
+            elif key in ('left', 'right'):
+                direction = -1 if key == 'left' else 1
+                if self.encyclopedia_focus_area == 'category':
+                    self.move_encyclopedia_category(direction)
+                else:
+                    self.focus_encyclopedia_profiles(direction)
+        elif self.game.phase == 'prepare':
+            if key == 'up':
+                self.move_defense_selection(-1)
+            elif key == 'down':
+                self.move_defense_selection(1)
+            elif key == 'left':
+                self.move_pad_selection(-1)
+            elif key == 'right':
+                self.move_pad_selection(1)
+        elif self.game.phase == 'pause':
+            self.move_dialog_focus(key)
+
+    def update_focus_key_repeat(self, dt):
+        dt = min(dt, 0.05)
+        held_navigation_keys = self.keys & {
+            'tab', 'up', 'down', 'left', 'right'
+        }
+        if len(held_navigation_keys) > 1:
+            # Modifiers such as Shift do not count as navigation keys, so
+            # Shift+Tab remains eligible while two navigation keys do not.
+            for key in held_navigation_keys:
+                if key in self.focus_hold_elapsed:
+                    self.focus_hold_elapsed[key] = 0.0
+                    self.focus_repeat_elapsed[key] = 0.0
+            return
+        for key in tuple(self.focus_hold_elapsed):
+            if key not in self.keys or not self.is_focus_repeat_key(key):
+                self.focus_hold_elapsed.pop(key, None)
+                self.focus_repeat_elapsed.pop(key, None)
+                continue
+            held = self.focus_hold_elapsed[key]
+            if held < self.focus_repeat_delay:
+                held = min(self.focus_repeat_delay, held + dt)
+                self.focus_hold_elapsed[key] = held
+                if held >= self.focus_repeat_delay:
+                    self.repeat_focus_navigation(key)
+            else:
+                elapsed = self.focus_repeat_elapsed[key] + dt
+                if elapsed >= self.focus_repeat_interval:
+                    elapsed %= self.focus_repeat_interval
+                    self.repeat_focus_navigation(key)
+                self.focus_repeat_elapsed[key] = elapsed
 
     def click(self, x, y):
         if self.drawn_phase != self.game.phase:
@@ -543,6 +653,7 @@ class Interface:
                     return
 
     def tick(self, dt, movement_keys=None):
+        self.update_focus_key_repeat(dt)
         keys = self.keys
         if movement_keys is not None:
             keys = self.keys | set(movement_keys)
