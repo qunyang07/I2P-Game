@@ -24,14 +24,20 @@ KEY_NAMES = {
     '[5]': '5',
 }
 
-SCANCODE_MOVEMENT_KEYS = {26: 'w', 4: 'a', 22: 's', 7: 'd'}
 SCANCODE_SHORTCUT_KEYS = {
-    **SCANCODE_MOVEMENT_KEYS,
-    44: 'space',
-    11: 'h', 20: 'q', 21: 'r', 24: 'u',
+    4: 'a', 7: 'd', 8: 'e', 11: 'h', 19: 'p', 20: 'q', 21: 'r',
+    24: 'u', 26: 'w', 22: 's', 30: '1', 31: '2', 32: '3', 33: '4',
+    34: '5', 40: 'enter', 41: 'escape', 42: 'backspace', 43: 'tab',
+    44: 'space', 79: 'right', 80: 'left', 81: 'down', 82: 'up',
+    225: 'shift', 229: 'shift',
 }
 WINDOWS_PHYSICAL_VKS = {
-    'w': 0x57, 'a': 0x41, 's': 0x53, 'd': 0x44, 'space': 0x20,
+    'w': 0x57, 'a': 0x41, 's': 0x53, 'd': 0x44,
+    'h': 0x48, 'q': 0x51, 'r': 0x52, 'u': 0x55, 'p': 0x50,
+    '1': 0x31, '2': 0x32, '3': 0x33, '4': 0x34, '5': 0x35,
+    'space': 0x20, 'enter': 0x0D, 'escape': 0x1B, 'backspace': 0x08,
+    'tab': 0x09, 'left': 0x25, 'up': 0x26, 'right': 0x27,
+    'down': 0x28, 'shift': 0x10,
 }
 _windows_get_async_key_state = None
 _windows_key_state_loaded = False
@@ -106,6 +112,7 @@ def run_pygame(pygame):
         clock = pygame.time.Clock()
         interface = Interface(PygameCanvas(pygame, screen))
         windows_keys = set()
+        window_focused = True
         while True:
             dt = clock.tick(60) / 1000
             for event in pygame.event.get():
@@ -126,44 +133,51 @@ def run_pygame(pygame):
                     )
                     interface.canvas.set_display(screen)
                 if event.type == pygame.KEYDOWN:
-                    physical_key = SCANCODE_SHORTCUT_KEYS.get(
-                        getattr(event, 'scancode', None)
+                    key = SCANCODE_SHORTCUT_KEYS.get(
+                        getattr(event, 'scancode', None),
+                        normalize_key(pygame.key.name(event.key)),
                     )
-                    key = physical_key or normalize_key(pygame.key.name(event.key))
                     interface.key_down(key)
                 elif event.type == pygame.KEYUP:
-                    physical_key = SCANCODE_SHORTCUT_KEYS.get(
-                        getattr(event, 'scancode', None)
+                    key = SCANCODE_SHORTCUT_KEYS.get(
+                        getattr(event, 'scancode', None),
+                        normalize_key(pygame.key.name(event.key)),
                     )
-                    key = physical_key or normalize_key(pygame.key.name(event.key))
                     interface.key_up(key)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     scale = interface.canvas.display_scale()
                     interface.click(event.pos[0] / scale, event.pos[1] / scale)
                 elif event.type == pygame.WINDOWFOCUSLOST:
+                    window_focused = False
                     interface.focus_lost()
+                    for key in windows_keys:
+                        interface.key_up(key)
+                    windows_keys.clear()
                 elif event.type == pygame.WINDOWFOCUSGAINED:
+                    window_focused = True
                     interface.focus_gained()
             if interface.quit_requested:
                 return
-            current_windows_keys = windows_pressed_physical_keys()
-            if 'space' in current_windows_keys - windows_keys:
-                interface.key_down('space')
-            if 'space' in windows_keys - current_windows_keys:
-                interface.key_up('space')
+            current_windows_keys = (
+                windows_pressed_physical_keys() if window_focused else set()
+            )
+            for key in current_windows_keys - windows_keys:
+                interface.key_down(key)
+            for key in windows_keys - current_windows_keys:
+                interface.key_up(key)
             windows_keys = current_windows_keys
             scale = interface.canvas.display_scale()
             mouse_x, mouse_y = pygame.mouse.get_pos()
             interface.pointer = mouse_x / scale, mouse_y / scale
             pressed = pygame.key.get_pressed()
             movement_keys = set()
-            if pressed[pygame.K_a]:
+            if window_focused and pressed[pygame.K_a]:
                 movement_keys.add('a')
-            if pressed[pygame.K_d]:
+            if window_focused and pressed[pygame.K_d]:
                 movement_keys.add('d')
-            if pressed[pygame.K_w]:
+            if window_focused and pressed[pygame.K_w]:
                 movement_keys.add('w')
-            if pressed[pygame.K_s]:
+            if window_focused and pressed[pygame.K_s]:
                 movement_keys.add('s')
             movement_keys.update(current_windows_keys & {'w', 'a', 's', 'd'})
             interface.tick(dt, movement_keys)
