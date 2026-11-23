@@ -24,6 +24,9 @@ class Interface:
         self.focus_repeat_elapsed = {}
         self.focus_repeat_delay = 0.455
         self.focus_repeat_interval = 0.10
+        self.focus_flash_elapsed = 0.0
+        self.focus_flash_half_period = 0.55
+        self.focus_flash_target = None
         self.buttons = []
         self.focused_button_index = None
         self.selected_defense_kind = 0
@@ -57,6 +60,33 @@ class Interface:
     def label(self, x, y, chinese, english, size=18, color=TEXT, anchor='w'):
         self.text(x, y, self.word(chinese, english), size, color, anchor)
 
+    def focus_outline_color(self):
+        return (GOLD if int(self.focus_flash_elapsed / self.focus_flash_half_period) % 2 == 0
+                else '#92774A')
+
+    @staticmethod
+    def brighten_color(color, amount=0.14):
+        channels = (int(color[index:index + 2], 16) for index in (1, 3, 5))
+        return '#' + ''.join(
+            f'{round(channel + (255 - channel) * amount):02x}'
+            for channel in channels
+        )
+
+    def refresh_focus_flash(self):
+        target = (
+            self.game.phase,
+            self.exit_confirmation,
+            self.focused_button_index,
+            (self.prepare_focus_area, self.prepare_focused_pad)
+            if self.game.phase == 'prepare' else None,
+            (self.encyclopedia_focus_area, self.encyclopedia_focus_category,
+             self.encyclopedia_focus_profile)
+            if self.game.phase == 'encyclopedia' else None,
+        )
+        if target != self.focus_flash_target:
+            self.focus_flash_elapsed = 0.0
+            self.focus_flash_target = target
+
     def button(self, x, y, width, height, title, action, accent=BLUE, primary=False,
                size=16, selected_outline=False, hover_fill=True):
         bounds = (x, y, width, height)
@@ -70,13 +100,17 @@ class Interface:
         index = len(self.buttons)
         focused = index == self.focused_button_index
         hover = inside(*self.pointer, bounds)
-        fill = accent if primary else (
-            '#294355' if hover and hover_fill else '#203345'
-        )
+        fill = accent if primary else '#203345'
+        if hover:
+            fill = (
+                '#294355' if hover_fill and not primary
+                else self.brighten_color(fill)
+            )
         # Selection controls the fill; keyboard focus only adds an outer ring.
-        outline = GOLD if focused else accent if hover or primary or selected_outline else BORDER
+        outline = (self.focus_outline_color() if focused else
+                   accent if hover else BORDER)
         self.canvas.rect(*bounds, fill, outline=outline,
-                         line_width=3 if focused else 1)
+                         line_width=3 if focused else 2 if hover else 1)
         return index, focused, fill
 
     def speed_button(self, x, y, width, height):
@@ -653,6 +687,7 @@ class Interface:
                     return
 
     def tick(self, dt, movement_keys=None):
+        self.focus_flash_elapsed += min(dt, 0.05)
         self.update_focus_key_repeat(dt)
         keys = self.keys
         if movement_keys is not None:
@@ -680,7 +715,7 @@ class Interface:
                            and index == self.prepare_focused_pad)
             unlocked = self.game.unlocked_pads[index]
             pad_fill = '#233d45' if unlocked else '#17252b'
-            pad_outline = (GOLD if focused_pad else
+            pad_outline = (self.focus_outline_color() if focused_pad else
                            '#54727c' if unlocked else '#765d39')
             draw.circle(x, y, 26, pad_fill, outline=pad_outline,
                         width=3 if focused_pad else 2)
@@ -726,7 +761,7 @@ class Interface:
             if drop.energy:
                 self.draw_energy_drop(x, y)
             else:
-                draw.rect(x - 6, y - 6, 12, 12, '#000000')
+                draw.rect(x - 5.5, y - 5.5, 11, 11, '#000000')
                 draw.rect(x - 4, y - 4, 8, 8, GOLD)
         for enemy in game.enemies:
             kind = ENEMY_KINDS[enemy.kind]
@@ -932,7 +967,7 @@ class Interface:
         for index, defense in enumerate(DEFENSES):
             y = 251 + index * 43
             cost = defense.cost
-            self.button_surface((868, y, 246, 30), defense.color,
+            self.button_surface((868, y, 246, 30), DEFENSES[0].color,
                                 hover_fill=False)
             self.text(878, y + 15, f'{index + 1}  {self.word(*defense.name)}',
                       12, TEXT, 'w')
@@ -1255,6 +1290,7 @@ class Interface:
                 )
             else:
                 self.focused_button_index = 0 if game.phase in ('title', 'pause') else None
+        self.refresh_focus_flash()
         self.drawn_phase = game.phase
         self.buttons.clear()
         pause_menu_focus = self.focused_button_index if game.phase == 'pause' else None

@@ -111,6 +111,10 @@ def run_pygame(pygame):
         pygame.display.set_caption('大禮堂防衛戰 | Auditorium Defense')
         clock = pygame.time.Clock()
         interface = Interface(PygameCanvas(pygame, screen))
+        pygame_arrow_keys = {
+            pygame.K_LEFT: 'left', pygame.K_UP: 'up',
+            pygame.K_RIGHT: 'right', pygame.K_DOWN: 'down',
+        }
         windows_keys = set()
         window_focused = True
         while True:
@@ -137,12 +141,14 @@ def run_pygame(pygame):
                         getattr(event, 'scancode', None),
                         normalize_key(pygame.key.name(event.key)),
                     )
+                    key = pygame_arrow_keys.get(event.key, key)
                     interface.key_down(key)
                 elif event.type == pygame.KEYUP:
                     key = SCANCODE_SHORTCUT_KEYS.get(
                         getattr(event, 'scancode', None),
                         normalize_key(pygame.key.name(event.key)),
                     )
+                    key = pygame_arrow_keys.get(event.key, key)
                     interface.key_up(key)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     scale = interface.canvas.display_scale()
@@ -158,9 +164,15 @@ def run_pygame(pygame):
                     interface.focus_gained()
             if interface.quit_requested:
                 return
+            pressed = pygame.key.get_pressed()
             current_windows_keys = (
                 windows_pressed_physical_keys() if window_focused else set()
             )
+            if window_focused:
+                current_windows_keys.update(
+                    name for keycode, name in pygame_arrow_keys.items()
+                    if pressed[keycode]
+                )
             for key in current_windows_keys - windows_keys:
                 interface.key_down(key)
             for key in windows_keys - current_windows_keys:
@@ -169,7 +181,6 @@ def run_pygame(pygame):
             scale = interface.canvas.display_scale()
             mouse_x, mouse_y = pygame.mouse.get_pos()
             interface.pointer = mouse_x / scale, mouse_y / scale
-            pressed = pygame.key.get_pressed()
             movement_keys = set()
             if window_focused and pressed[pygame.K_a]:
                 movement_keys.add('a')
