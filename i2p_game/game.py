@@ -17,7 +17,7 @@ from .config import (
     STARTING_PLAYER_HP, UPGRADE_COSTS, WAVES,
 )
 from .geometry import distance
-from .models import Drop, Enemy, Projectile, Shot, Tower
+from .models import DamageNumber, Drop, Enemy, Projectile, Shot, Tower
 
 
 class Game:
@@ -33,6 +33,7 @@ class Game:
         self.wave = 0
         self.spawned = 0
         self.rng = random.Random()
+        self.damage_rng = random.Random()
         self.wave_queue = list(self.waves[self.wave])
         self.rng.shuffle(self.wave_queue)
         self.route_queue = list(ENTRANCES)
@@ -55,6 +56,7 @@ class Game:
         self.enemies = []
         self.projectiles = []
         self.drops = []
+        self.damage_numbers = []
         self.shots = []
         self.towers = [None] * len(ALL_PADS)
         self.unlocked_pads = [True] * len(PADS) + [difficulty != 'hard'] * len(HARD_PAD_COSTS)
@@ -209,6 +211,9 @@ class Game:
             gap = hypot(dx, dy)
             if gap > PLAYER_MELEE_RANGE + ENEMY_KINDS[enemy.kind].radius:
                 continue
+            self.show_damage_number(
+                enemy.x, enemy.y, min(enemy.hp, damage)
+            )
             enemy.hp -= damage
             hit_count += 1
         if hit_count:
@@ -216,6 +221,12 @@ class Game:
             if self.tutorial_active:
                 self.tutorial_hit = True
         return True
+
+    def show_damage_number(self, x, y, amount, color='#fff1b3'):
+        if amount > 0:
+            x += self.damage_rng.uniform(-10, 10)
+            y += self.damage_rng.uniform(-6, 6)
+            self.damage_numbers.append(DamageNumber(x, y, int(amount), color))
 
     def move_player(self, dx, dy, dt):
         length = hypot(dx, dy)
@@ -399,6 +410,10 @@ class Game:
                     enemy.base_wait -= dt
                     if enemy.base_wait <= 0 and self.hurt_wait <= 0:
                         damage = round(kind.player_damage * (1.25 if self.difficulty == 'hard' else 1))
+                        self.show_damage_number(
+                            self.player_x, self.player_y,
+                            min(self.player_hp, damage), '#ff2020',
+                        )
                         self.player_hp = max(0, self.player_hp - damage)
                         self.hurt_wait = 0.62
                         enemy.base_wait = kind.attack_interval * (0.8 if self.difficulty == 'hard' else 1)
@@ -420,6 +435,9 @@ class Game:
                         tower = self.towers[wall_index]
                         if tower is not None:
                             damage = round(kind.base_damage * (1.25 if self.difficulty == 'hard' else 1))
+                            self.show_damage_number(
+                                *ALL_PADS[wall_index], min(tower.hp, damage), '#ffaaa6'
+                            )
                             tower.hp = max(0, tower.hp - damage)
                             enemy.wall_wait = max(0.45, kind.attack_interval * (0.8 if self.difficulty == 'hard' else 1))
                             if tower.hp == 0:
@@ -448,11 +466,18 @@ class Game:
                         ))
                     else:
                         damage = round(kind.base_damage * (1.25 if self.difficulty == 'hard' else 1))
+                        self.show_damage_number(
+                            *BASE, min(self.base_hp, damage), '#ff2020'
+                        )
                         self.base_hp = max(0, self.base_hp - damage)
 
             if (enemy.stunned <= 0 and self.hurt_wait <= 0
                     and distance(enemy.x, enemy.y, self.player_x, self.player_y) < kind.radius + 13):
                 damage = round(kind.player_damage * (1.25 if self.difficulty == 'hard' else 1))
+                self.show_damage_number(
+                    self.player_x, self.player_y,
+                    min(self.player_hp, damage), '#ff2020',
+                )
                 self.player_hp = max(0, self.player_hp - damage)
                 self.hurt_wait = 0.62
 
@@ -511,6 +536,9 @@ class Game:
                           defense.damage * 3 // 2 if level == 2 else defense.damage)
                 knockback = DOG_KNOCKBACK_DISTANCE + (6 if level >= 2 else 0) + (6 if level >= 3 else 0)
                 for enemy in targets:
+                    self.show_damage_number(
+                        enemy.x, enemy.y, min(enemy.hp, damage)
+                    )
                     enemy.hp -= damage
                     enemy.knockback_effect = DOG_KNOCKBACK_EFFECT_DURATION
                     enemy_knockback = (knockback * 0.5
@@ -580,8 +608,13 @@ class Game:
 
             if defense.mode == 'trap':
                 if ENEMY_KINDS[target.kind].boss:
-                    target.hp -= 180 if level == 1 else 240 if level == 2 else 320
+                    damage = 180 if level == 1 else 240 if level == 2 else 320
+                    self.show_damage_number(
+                        target.x, target.y, min(target.hp, damage)
+                    )
+                    target.hp -= damage
                 else:
+                    self.show_damage_number(target.x, target.y, target.hp)
                     target.hp = 0
                 tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
                 tower.wait_total = tower.wait
@@ -591,6 +624,7 @@ class Game:
 
             damage = (defense.damage * 2 if level >= 3 else
                       defense.damage * 3 // 2 if level == 2 else defense.damage)
+            self.show_damage_number(target.x, target.y, min(target.hp, damage))
             target.hp -= damage
             self.shots.append(Shot(pad, (target.x, target.y), defense.color))
             tower.wait = defense.interval * (0.8 if level == 2 else 0.65 if level >= 3 else 1)
@@ -628,17 +662,27 @@ class Game:
                         first_wall, first_wall_t = index, wall_t
                 if first_wall is not None and (not base_hit or first_wall_t < base_t):
                     wall = self.towers[first_wall]
+                    self.show_damage_number(
+                        *ALL_PADS[first_wall], min(wall.hp, projectile.damage), '#ffaaa6'
+                    )
                     wall.hp = max(0, wall.hp - projectile.damage)
                     if wall.hp == 0:
                         self.towers[first_wall] = None
                     continue
                 if base_hit:
+                    self.show_damage_number(
+                        *BASE, min(self.base_hp, projectile.damage), '#ff2020'
+                    )
                     self.base_hp = max(0, self.base_hp - projectile.damage)
                     continue
             elif projectile.target_type == 'player':
                 t, hit = segment_hit(self.player_x, self.player_y, 16)
                 if hit:
                     if self.hurt_wait <= 0:
+                        self.show_damage_number(
+                            self.player_x, self.player_y,
+                            min(self.player_hp, projectile.damage), '#ff2020',
+                        )
                         self.player_hp = max(0, self.player_hp - projectile.damage)
                         self.hurt_wait = 0.62
                     continue
@@ -653,12 +697,20 @@ class Game:
                         first_hit, first_hit_t = enemy, t
                 if first_hit is not None:
                     impact_x, impact_y = start_x + first_hit_t * dx, start_y + first_hit_t * dy
+                    self.show_damage_number(
+                        first_hit.x, first_hit.y,
+                        min(first_hit.hp, projectile.damage),
+                    )
                     first_hit.hp -= projectile.damage
                     if projectile.splash_radius:
                         for enemy in self.enemies:
                             if enemy is not first_hit and enemy.hp > 0 and distance(
                                 enemy.x, enemy.y, impact_x, impact_y
                             ) <= projectile.splash_radius:
+                                self.show_damage_number(
+                                    enemy.x, enemy.y,
+                                    min(enemy.hp, projectile.splash_damage),
+                                )
                                 enemy.hp -= projectile.splash_damage
                     continue
 
@@ -706,6 +758,12 @@ class Game:
         dt *= time_scale
         if self.phase not in ('combat', 'prepare'):
             return
+        for number in self.damage_numbers:
+            number.age += dt
+        self.damage_numbers = [
+            number for number in self.damage_numbers
+            if number.age < number.lifetime
+        ]
         for enemy in self.enemies:
             enemy.knockback_effect = max(0.0, enemy.knockback_effect - dt)
         self.notice_left = max(0.0, self.notice_left - dt)

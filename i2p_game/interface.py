@@ -225,8 +225,10 @@ class Interface:
         start = self.prepare_defense_button_start
         repair_index = start + len(DEFENSES)
         upgrade_index = repair_index + 1
+        next_wave_index = upgrade_index + 1
         focus_order = [
             *range(start, repair_index), repair_index, upgrade_index,
+            next_wave_index,
         ]
         try:
             current = focus_order.index(self.focused_button_index)
@@ -818,6 +820,22 @@ class Interface:
             progress = 1 - game.melee_flash / PLAYER_MELEE_FLASH_DURATION
             reach = PLAYER_MELEE_RANGE * (0.58 + 0.42 * progress)
             draw.circle(x, y, reach, None, outline=GOLD, width=4)
+        for number in game.damage_numbers:
+            progress = number.age / number.lifetime
+            number_y = number.y - 20 - progress * 32
+            color = number.color if progress < 0.65 else (
+                '#b01010' if number.color == '#ff2020' else '#b5a47a'
+            )
+            size = 16 if progress < 0.2 else 14
+            for dx in (-0.5, 0, 0.5):
+                for dy in (-0.5, 0, 0.5):
+                    if dx or dy:
+                        self.text(number.x + dx, number_y + dy,
+                                  str(number.amount), size, '#05090d', 'center')
+            for dx, dy in ((-0.5, 0), (0.5, 0), (0, -0.5), (0, 0.5)):
+                self.text(number.x + dx, number_y + dy, str(number.amount),
+                          size, color, 'center')
+            self.text(number.x, number_y, str(number.amount), size, color, 'center')
 
     def cover_outside_field(self):
         """Cover any entity artwork drawn beyond the battlefield rectangle."""

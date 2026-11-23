@@ -47,6 +47,16 @@ class Drop:
 
 
 @dataclass
+class DamageNumber:
+    x: float
+    y: float
+    amount: int
+    color: str = '#fff1b3'
+    age: float = 0.0
+    lifetime: float = 0.8
+
+
+@dataclass
 class Shot:
     origin: tuple
     target: tuple
