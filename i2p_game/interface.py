@@ -759,12 +759,7 @@ class Interface:
     def draw_entities(self):
         draw, game = self.canvas, self.game
         for drop in game.drops:
-            x, y = round(drop.x), round(drop.y)
-            if drop.energy:
-                self.draw_energy_drop(x, y)
-            else:
-                draw.rect(x - 5.5, y - 5.5, 11, 11, '#000000')
-                draw.rect(x - 4, y - 4, 8, 8, GOLD)
+            self.draw_resource_icon(round(drop.x), round(drop.y), energy=drop.energy)
         for enemy in game.enemies:
             kind = ENEMY_KINDS[enemy.kind]
             x, y, radius = enemy.x, enemy.y, kind.radius
@@ -846,12 +841,15 @@ class Interface:
         self.canvas.rect(0, top, left, height, BG)
         self.canvas.rect(right, top, WIDTH - right, height, BG)
 
-    def draw_energy_drop(self, x, y):
-        """Draw energy as a purple circle inside a larger black circle."""
-        outer_radius = 7
-        border_width = 1.5
-        self.canvas.circle(x, y, outer_radius, '#000000')
-        self.canvas.circle(x, y, outer_radius - border_width, PURPLE)
+    def draw_resource_icon(self, x, y, *, energy, scale=1.0):
+        draw = self.canvas
+        if energy:
+            draw.circle(x, y, 7 * scale, '#000000')
+            draw.circle(x, y, 5.5 * scale, PURPLE)
+        else:
+            outer, inner = 11 * scale, 8 * scale
+            draw.rect(x - outer / 2, y - outer / 2, outer, outer, '#000000')
+            draw.rect(x - inner / 2, y - inner / 2, inner, inner, GOLD)
 
     def bar(self, x, y, width, height, fraction, color, border=0):
         if border:
@@ -878,6 +876,13 @@ class Interface:
                 color, width=3,
             )
 
+    def draw_resource_counter(self, x, title, amount, *, energy):
+        accent, background = (PURPLE, '#2b2140') if energy else (GOLD, '#382918')
+        self.canvas.rect(x, 26, 82, 54, background, outline=accent)
+        self.label(x + 9, 38, *title, 12, MUTED)
+        self.draw_resource_icon(x + 18, 63, energy=energy, scale=1.5)
+        self.text(x + 73, 63, str(amount), 24, accent, 'e')
+
     def draw_hud(self):
         draw, game = self.canvas, self.game
         draw.rect(20, 18, 1112, 72, PANEL, outline=BORDER)
@@ -889,12 +894,10 @@ class Interface:
         self.label(548, 39, '禮堂耐久', 'AUDITORIUM HP', 14, GREEN)
         self.text(742, 39, f'{game.base_hp} / {MAX_BASE_HP}', 15, TEXT, 'e')
         self.bar(548, 59, 194, 8, game.base_hp / MAX_BASE_HP, GREEN)
-        self.label(783, 39, '波次', 'WAVE', 14, MUTED)
-        self.text(783, 65, f'{game.wave + 1} / {len(game.waves)}', 20)
-        self.label(836, 39, '零件', 'PARTS', 14, GOLD)
-        self.text(836, 65, str(game.parts), 20, GOLD)
-        self.label(916, 39, '能量', 'ENERGY', 14, PURPLE)
-        self.text(916, 65, str(game.energy), 20, PURPLE)
+        self.label(760, 39, '波次', 'WAVE', 14, MUTED)
+        self.text(760, 65, f'{game.wave + 1} / {len(game.waves)}', 20)
+        self.draw_resource_counter(813, ('零件', 'PARTS'), game.parts, energy=False)
+        self.draw_resource_counter(900, ('能量', 'ENERGY'), game.energy, energy=True)
         if game.phase in ('combat', 'prepare'):
             self.speed_button(990, 29, 68, 42)
             self.pause_button(1070, 29, 42, 42)
