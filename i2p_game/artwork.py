@@ -9,7 +9,7 @@ NEW_IMAGE_DIR = ASSET_DIR / "images(new)"
 ARTWORK_FILES = {
     "field1": NEW_IMAGE_DIR / "field1_bg.png",
     "field2": NEW_IMAGE_DIR / "field2_bg.png",
-    "auditorium_logo": NEW_IMAGE_DIR / "auditorium_logo.png",
+    "auditorium_logo": NEW_IMAGE_DIR / "auditorium_pixel.png",
     "auditorium_title": NEW_IMAGE_DIR / "auditorium.jpg",
     "defender": NEW_IMAGE_DIR / "NaiFrog.png",
     "bear": NEW_IMAGE_DIR / "Bear.png",
@@ -30,8 +30,8 @@ ARTWORK_FILES = {
 SPRITE_SIZES = {
     "field1": (810, 553),
     "field2": (810, 553),
-    "auditorium_logo": (120, 80),
-    "auditorium_title": (240, 160),
+    "auditorium_logo": (126, 84),
+    "auditorium_title": (240, 132),
     "defender": (42, 84),
     "bear": (42, 61),
     "small_bear": (42, 56),

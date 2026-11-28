@@ -22,6 +22,7 @@ class PygameCanvas:
         }
         self.scale = RENDER_SCALE * self.display_scale()
         self.screen = self._new_render_surface()
+        self.damage_glow = None
         self._rebuild_render_art()
 
         self.font_file = (
@@ -100,6 +101,7 @@ class PygameCanvas:
         self.display = screen
         self.scale = RENDER_SCALE * self.display_scale()
         self.screen = self._new_render_surface()
+        self.damage_glow = None
         self._rebuild_render_art()
         self.fonts.clear()
         self.portrait_cache.clear()
@@ -107,6 +109,19 @@ class PygameCanvas:
     def _new_render_surface(self):
         width, height = self.display.get_size()
         return self.pg.Surface((width * RENDER_SCALE, height * RENDER_SCALE))
+
+    def damage_vignette(self, bounds, strength):
+        left, top, width, height = (int(value * self.scale) for value in bounds)
+        if self.damage_glow is None or self.damage_glow.get_size() != (width, height):
+            depth = min(round(62 * self.scale), min(width, height) // 2)
+            self.damage_glow = self.pg.Surface((width, height), self.pg.SRCALPHA)
+            for inset in range(depth):
+                falloff = 1 - inset / depth
+                color = (248, round(26 + 35 * falloff), 48, round(215 * falloff ** 2))
+                ring = (inset, inset, width - 2 * inset, height - 2 * inset)
+                self.pg.draw.rect(self.damage_glow, color, ring, 1)
+        self.damage_glow.set_alpha(round(255 * strength))
+        self.screen.blit(self.damage_glow, (left, top))
 
     def _rebuild_render_art(self):
         self.art = {}
@@ -246,6 +261,21 @@ class TkCanvas:
     def clear(self, color):
         self.canvas.delete('all')
         self.canvas.configure(background=color)
+
+    def damage_vignette(self, bounds, strength):
+        # Stippled bands approximate the translucent falloff on Tk's canvas.
+        stipples = ('gray12', 'gray25', 'gray50', 'gray75')
+        left, top, width, height = bounds
+        depth = min(62, min(width, height) // 2)
+        for inset in range(1, depth, 2):
+            opacity = strength * (1 - inset / depth) ** 2
+            level = round(4 * opacity)
+            if level:
+                self.canvas.create_rectangle(
+                    left + inset, top + inset,
+                    left + width - inset - 1, top + height - inset - 1,
+                    outline='#f43836', width=2, outlinestipple=stipples[level - 1],
+                )
 
     def image(self, name, x, y):
         self.canvas.create_image(x, y, image=self.art[name], anchor='nw')

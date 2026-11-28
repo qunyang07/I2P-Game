@@ -1,6 +1,7 @@
 """Input handling and game screen drawing."""
 
 from math import ceil, cos, pi, sin
+from textwrap import wrap
 
 from .config import (
     BASE, BASE_RADIUS, BG, BLUE, BORDER, BOSS_KIND, BOSS_PHASE_COUNT, BOSS_WAVE,
@@ -8,12 +9,31 @@ from .config import (
     ALL_PADS, HARD_PAD_COSTS, PADS, PANEL, FIELD2_START_WAVE, PLAYER_MELEE_COOLDOWN,
     PLAYER_MELEE_FLASH_DURATION, PLAYER_MELEE_RANGE, PLAYER_RANGED_INTERVAL,
     PLAYER_RANGED_RANGE,
-    PURPLE, RED, SIDE, TEXT, WIDTH,
+    PURPLE, RED, REPAIR_COST, REPAIR_HP, SIDE, TEXT, WIDTH,
     UPGRADE_COSTS, UPGRADES,
 )
 from .models import Button
 from .game import Game
 from .geometry import distance, inside
+
+FRAME_INK = '#09151c'
+FRAME_EDGE = '#587575'
+FRAME_INSET = '#233941'
+BASE_DAMAGE_FLASH_DURATION = 0.72
+(
+    TUTORIAL_MOVE, TUTORIAL_MELEE, TUTORIAL_GATHER, TUTORIAL_PAD,
+    TUTORIAL_BUILD, TUTORIAL_UPGRADE, TUTORIAL_REPAIR, TUTORIAL_START,
+) = range(8)
+
+# Ground tiles follow an ellipse to match the battlefield's viewing angle.
+COURTYARD_STONES = tuple(
+    (
+        round(75 * cos(angle)), round(65 * sin(angle)),
+        (8, 5) if abs(sin(angle)) >= abs(cos(angle)) else (5, 8),
+    )
+    for angle in (index * pi / 24 for index in range(48))
+)
+
 
 class Interface:
     def __init__(self, canvas):
@@ -42,6 +62,7 @@ class Interface:
         self.tutorial_step = None
         self.game_speed = 1.0
         self.game_speeds = (1.0, 1.5, 2.0)
+        self.base_damage_flash = 0.0
         self.encyclopedia_return_phase = 'title'
         self.encyclopedia_category = 0
         self.encyclopedia_index = 0
@@ -72,6 +93,27 @@ class Interface:
             for channel in channels
         )
 
+    def pixel_box(self, bounds, color, step):
+        """Fill a rectangle with square notches at its corners."""
+        x, y, width, height = bounds
+        self.canvas.rect(x + step, y, width - 2 * step, height, color)
+        self.canvas.rect(x, y + step, width, height - 2 * step, color)
+
+    def pixel_frame(self, bounds, fill, edge=FRAME_EDGE, *, step=4, rim=2):
+        """Draw a pixel frame with a lit top edge and a recessed bottom edge."""
+        x, y, width, height = bounds
+        inset = rim + 1
+        self.pixel_box(bounds, FRAME_INK, step)
+        self.pixel_box((x + 1, y + 1, width - 2, height - 2), edge, step)
+        self.pixel_box(
+            (x + inset, y + inset, width - 2 * inset, height - 2 * inset),
+            fill, step,
+        )
+        face_x = x + inset + step
+        face_width = width - 2 * (inset + step)
+        self.canvas.rect(face_x, y + inset, face_width, 1, self.brighten_color(fill, 0.2))
+        self.canvas.rect(face_x, y + height - inset - 2, face_width, 2, FRAME_INK)
+
     def refresh_focus_flash(self):
         target = (
             self.game.phase,
@@ -99,18 +141,20 @@ class Interface:
                        selected_outline=False, hover_fill=True):
         index = len(self.buttons)
         focused = index == self.focused_button_index
+        if (self.game.phase == 'prepare' and self.prepare_focus_area == 'pad'
+                and self.prepare_defense_button_start <= index
+                < self.prepare_defense_button_start + len(DEFENSES)):
+            focused = False
         hover = inside(*self.pointer, bounds)
-        fill = accent if primary else '#203345'
+        fill = accent if primary else FRAME_INSET
         if hover:
             fill = (
-                '#294355' if hover_fill and not primary
+                '#34505a' if hover_fill and not primary
                 else self.brighten_color(fill)
             )
-        # Selection controls the fill; keyboard focus only adds an outer ring.
         outline = (self.focus_outline_color() if focused else
-                   accent if hover else BORDER)
-        self.canvas.rect(*bounds, fill, outline=outline,
-                         line_width=3 if focused else 2 if hover else 1)
+                   accent if hover or primary or selected_outline else FRAME_EDGE)
+        self.pixel_frame(bounds, fill, outline, step=3, rim=3 if focused else 2)
         return index, focused, fill
 
     def speed_button(self, x, y, width, height):
@@ -214,12 +258,12 @@ class Interface:
         count = len(ALL_PADS) if self.game.difficulty == 'hard' else len(PADS)
         self.prepare_focused_pad = (self.prepare_focused_pad + direction) % count
         self.game.selected_pad = self.prepare_focused_pad
-        self.prepare_focus_area = 'controls'
+        self.prepare_focus_area = 'pad'
         self.prepare_selection_active = True
-        if self.focused_button_index is None:
-            self.focused_button_index = (
-                self.prepare_defense_button_start + self.prepare_focused_defense_kind
-            )
+        self.focused_button_index = (
+            self.prepare_defense_button_start + self.prepare_focused_defense_kind
+        )
+        self.complete_tutorial_pad_selection()
 
     def move_defense_selection(self, direction):
         start = self.prepare_defense_button_start
@@ -230,11 +274,14 @@ class Interface:
             *range(start, repair_index), repair_index, upgrade_index,
             next_wave_index,
         ]
-        try:
-            current = focus_order.index(self.focused_button_index)
-            next_focus = (current + direction) % len(focus_order)
-        except ValueError:
-            next_focus = 0
+        if self.prepare_focus_area == 'pad':
+            next_focus = self.prepare_focused_defense_kind
+        else:
+            try:
+                current = focus_order.index(self.focused_button_index)
+                next_focus = (current + direction) % len(focus_order)
+            except ValueError:
+                next_focus = 0
         self.focused_button_index = focus_order[next_focus]
         if self.focused_button_index < repair_index:
             self.prepare_focused_defense_kind = self.focused_button_index - start
@@ -245,69 +292,80 @@ class Interface:
             self.prepare_selection_active = False
 
     def build_defense(self, kind):
+        if self.game.tutorial_active and self.tutorial_step not in (TUTORIAL_PAD, TUTORIAL_BUILD):
+            self.game.message('請完成目前標示的練習', 'Complete the highlighted tutorial action')
+            return
         self.game.selected_pad = self.prepare_focused_pad
         self.selected_defense_kind = kind
         self.prepare_selection_active = False
         self.prepare_focused_defense_kind = kind
         self.game.build(kind)
 
-    def start(self, difficulty='normal'):
+    def reset_session_controls(self):
         self.keys.clear()
         self.focus_hold_elapsed.clear()
         self.focus_repeat_elapsed.clear()
         self.focus_paused = False
+        self.game_speed = 1.0
+        self.base_damage_flash = 0.0
+        self.selected_defense_kind = 0
+        self.prepare_selection_active = False
+        self.prepare_focus_area = None
+        self.prepare_focused_defense_kind = 0
+
+    def start(self, difficulty='normal'):
+        self.reset_session_controls()
         self.game.reset(difficulty)
         self.tutorial_step = None
-        self.selected_defense_kind = 0
-        self.prepare_selection_active = False
-        self.prepare_focus_area = None
-        self.prepare_focused_defense_kind = 0
 
     def start_hard(self):
-        self.keys.clear()
-        self.focus_paused = False
-        self.game.reset('hard')
-        self.tutorial_step = None
-        self.selected_defense_kind = 0
-        self.prepare_selection_active = False
-        self.prepare_focus_area = None
-        self.prepare_focused_defense_kind = 0
+        self.start('hard')
 
     def start_tutorial(self):
-        self.keys.clear()
-        self.focus_paused = False
+        self.reset_session_controls()
         self.game.begin_tutorial()
-        self.tutorial_step = 0
-        self.selected_defense_kind = 0
-        self.prepare_selection_active = False
-        self.prepare_focus_area = None
-        self.prepare_focused_defense_kind = 0
+        self.tutorial_step = TUTORIAL_MOVE
+
+    def complete_tutorial_pad_selection(self):
+        if (self.game.tutorial_active and self.tutorial_step == TUTORIAL_PAD
+                and self.game.towers[self.prepare_focused_pad] is None):
+            self.tutorial_step = TUTORIAL_BUILD
 
     def advance_tutorial(self):
         """Advance the contextual tutorial after a player action."""
-        if not self.game.tutorial_active:
+        game = self.game
+        if not game.tutorial_active:
             return
-        if self.tutorial_step == 0 and self.game.tutorial_moved:
-            self.tutorial_step = 1
-            self.game.spawn_tutorial_target()
-            self.game.message('靠近熊後施展近戰', 'Approach the bear, then melee')
-        elif self.tutorial_step == 1 and self.game.tutorial_hit:
-            self.tutorial_step = 2
-            self.game.message('靠近金色方塊會自動吸取零件', 'Approach the gold square to collect parts')
-        elif self.tutorial_step == 2 and self.game.parts:
-            self.game.parts = max(self.game.parts, 2)
-            self.game.phase = 'prepare'
-            self.tutorial_step = 3
-            self.game.message('選擇建造點並建造施工圍牆', 'Select a pad and build a construction wall')
-        elif self.tutorial_step == 3 and any(self.game.towers):
-            self.tutorial_step = 4
-            self.game.message('教學完成！按 Backspace 開始正式第一波',
-                              'Tutorial complete! Press Backspace for Wave 1')
+        step = self.tutorial_step
+        if step == TUTORIAL_MOVE and game.tutorial_moved:
+            self.tutorial_step = TUTORIAL_MELEE
+            game.spawn_tutorial_target()
+        elif step == TUTORIAL_MELEE and game.tutorial_hit:
+            self.tutorial_step = TUTORIAL_GATHER
+        elif step == TUTORIAL_GATHER and game.parts and game.energy:
+            # Supply enough practice resources to try any of the five defenses.
+            game.parts = max(defense.cost[0] for defense in DEFENSES)
+            game.energy = max(defense.cost[1] for defense in DEFENSES)
+            game.phase = 'prepare'
+            self.tutorial_step = TUTORIAL_PAD
+        elif step in (TUTORIAL_PAD, TUTORIAL_BUILD) and any(game.towers):
+            parts, energy = UPGRADE_COSTS[0]
+            game.parts = max(game.parts, parts)
+            game.energy = max(game.energy, energy)
+            self.tutorial_step = TUTORIAL_UPGRADE
+        elif step == TUTORIAL_UPGRADE and any(
+            tower and tower.upgraded for tower in game.towers
+        ):
+            game.base_hp = MAX_BASE_HP - REPAIR_HP
+            game.parts = max(game.parts, REPAIR_COST)
+            self.tutorial_step = TUTORIAL_REPAIR
+        elif step == TUTORIAL_REPAIR and game.base_hp == MAX_BASE_HP:
+            self.tutorial_step = TUTORIAL_START
 
     def start_next_wave(self):
         self.prepare_selection_active = False
         if self.game.tutorial_active:
-            if self.tutorial_step != 4:
+            if self.tutorial_step != TUTORIAL_START:
                 self.game.message('請先完成目前的教學步驟', 'Finish the current tutorial step first')
                 return
             self.start()
@@ -512,7 +570,7 @@ class Interface:
                     elif self.prepare_selection_active:
                         self.game.selected_pad = self.prepare_focused_pad
                         self.build_defense(self.prepare_focused_defense_kind)
-                elif key == 'space' and self.prepare_focus_area == 'controls':
+                elif key == 'space' and self.prepare_focus_area in ('controls', 'pad'):
                     self.game.selected_pad = self.prepare_focused_pad
                     self.build_defense(self.prepare_focused_defense_kind)
                 elif key == 'r':
@@ -682,34 +740,53 @@ class Interface:
                         + self.prepare_focused_defense_kind
                     )
                     self.prepare_selection_active = False
-                    self.prepare_focus_area = 'controls'
+                    self.prepare_focus_area = 'pad'
                     if not self.game.unlocked_pads[index]:
                         self.game.unlock_pad(index)
+                    self.complete_tutorial_pad_selection()
                     self.advance_tutorial()
                     return
 
     def tick(self, dt, movement_keys=None):
-        self.focus_flash_elapsed += min(dt, 0.05)
+        frame_dt = min(dt, 0.05)
+        self.focus_flash_elapsed += frame_dt
+        self.base_damage_flash = max(0.0, self.base_damage_flash - frame_dt)
         self.update_focus_key_repeat(dt)
         keys = self.keys
         if movement_keys is not None:
             keys = self.keys | set(movement_keys)
         dx = int('d' in keys) - int('a' in keys)
         dy = int('s' in keys) - int('w' in keys)
-        self.game.update(min(dt, 0.05), dx, dy, time_scale=self.game_speed)
+        base_hp = self.game.base_hp
+        self.game.update(frame_dt, dx, dy, time_scale=self.game_speed)
+        if self.game.base_hp < base_hp:
+            self.base_damage_flash = BASE_DAMAGE_FLASH_DURATION
         self.advance_tutorial()
+
+    def draw_courtyard(self, x, y, rainy):
+        draw = self.canvas
+        shadow, stone, light = (
+            ('#233d42', '#476469', '#69878a') if rainy
+            else ('#32583a', '#657e50', '#91a56f')
+        )
+        for offset_x, offset_y, (width, height) in COURTYARD_STONES:
+            left = x + offset_x - width // 2
+            top = y + offset_y - height // 2
+            draw.rect(left, top + 1, width, height, shadow)
+            draw.rect(left + 1, top, width - 2, height - 1, stone)
+            draw.rect(left + 2, top, width - 4, 1, light)
 
     def draw_field(self):
         draw = self.canvas
         draw.rect(*FIELD, '#132931', outline='#38535d')
-        background = 'field2' if self.game.wave >= FIELD2_START_WAVE else 'field1'
+        rainy = self.game.wave >= FIELD2_START_WAVE
+        background = 'field2' if rainy else 'field1'
         draw.image(background, FIELD[0] + 1, FIELD[1] + 1)
-        draw.circle(*BASE, 108, '#1c373a')
-        draw.circle(*BASE, 75, '#203e43', outline='#4b7275', width=2)
-        draw.image('auditorium_logo', BASE[0] - 60, BASE[1] - 40)
-        self.bar(BASE[0] - 48, BASE[1] - BASE_RADIUS - 14,
+        base_x, base_y = BASE
+        self.draw_courtyard(base_x, base_y, rainy)
+        draw.sprite('auditorium_logo', base_x, base_y + 40)
+        self.bar(base_x - 48, base_y - BASE_RADIUS - 14,
                  96, 8, self.game.base_hp / MAX_BASE_HP, GREEN, border=1)
-        self.label(425, 434, '清大大禮堂', 'NTHU AUDITORIUM', 13, '#c8e4e6', 'center')
         pad_list = ALL_PADS if self.game.difficulty == 'hard' else PADS
         for index, (x, y) in enumerate(pad_list):
             tower = self.game.towers[index]
@@ -719,8 +796,8 @@ class Interface:
             pad_fill = '#233d45' if unlocked else '#17252b'
             pad_outline = (self.focus_outline_color() if focused_pad else
                            '#54727c' if unlocked else '#765d39')
-            draw.circle(x, y, 26, pad_fill, outline=pad_outline,
-                        width=3 if focused_pad else 2)
+            self.pixel_frame((x - 24, y - 24, 48, 48), pad_fill, pad_outline,
+                             step=7, rim=3 if focused_pad else 2)
             if focused_pad and tower is not None:
                 defense = DEFENSES[tower.kind]
                 if defense.reach > 0:
@@ -738,7 +815,8 @@ class Interface:
             else:
                 defense = DEFENSES[tower.kind]
                 draw.sprite(defense.artwork, x, y + 22)
-                draw.circle(x + 17, y - 17, 8, '#101d26', outline=TEXT)
+                self.pixel_frame((x + 9, y - 25, 16, 16), FRAME_INSET,
+                                 defense.color, step=2, rim=1)
                 self.text(x + 17, y - 17, str(tower.upgrade_level), 10, TEXT, 'center')
                 if tower.locked:
                     draw.circle(x, y, 30, '#141b20', outline=RED, width=3)
@@ -844,22 +922,33 @@ class Interface:
     def draw_resource_icon(self, x, y, *, energy, scale=1.0):
         draw = self.canvas
         if energy:
-            draw.circle(x, y, 7 * scale, '#000000')
-            draw.circle(x, y, 5.5 * scale, PURPLE)
+            outer, inner = 14 * scale, 11 * scale
+            self.pixel_box((x - outer / 2, y - outer / 2, outer, outer),
+                           FRAME_INK, 4 * scale)
+            self.pixel_box((x - inner / 2, y - inner / 2, inner, inner),
+                           PURPLE, 3 * scale)
+            draw.rect(x - 2 * scale, y - 3 * scale, 4 * scale, scale, '#f1e5ff')
         else:
             outer, inner = 11 * scale, 8 * scale
-            draw.rect(x - outer / 2, y - outer / 2, outer, outer, '#000000')
+            draw.rect(x - outer / 2, y - outer / 2, outer, outer, FRAME_INK)
             draw.rect(x - inner / 2, y - inner / 2, inner, inner, GOLD)
+            draw.rect(x - 3 * scale, y - 3 * scale, 6 * scale, scale, '#fff0be')
 
     def bar(self, x, y, width, height, fraction, color, border=0):
+        draw = self.canvas
         if border:
-            self.canvas.rect(x - border, y - border,
-                             width + border * 2, height + border * 2,
-                             '#000000')
-        self.canvas.rect(x, y, width, height, '#0b1923')
+            draw.rect(x - border, y - border,
+                      width + border * 2, height + border * 2, FRAME_INK)
+        draw.rect(x, y, width, height, '#0d1c22')
         filled = int(width * min(1.0, max(0.0, fraction)))
         if filled:
-            self.canvas.rect(x, y, filled, height, color)
+            draw.rect(x, y, filled, height, color)
+            if height >= 4:
+                draw.rect(x, y, filled, 1, self.brighten_color(color, 0.45))
+                draw.rect(x, y + height - 1, filled, 1, '#48605d')
+        if width >= 80 and height >= 6:
+            for offset in range(16, int(width), 16):
+                draw.rect(x + offset, y + height - 2, 1, 2, FRAME_INK)
 
     def cooldown_ring(self, x, y, radius, fraction, color):
         fraction = max(0.0, min(1.0, fraction))
@@ -878,14 +967,17 @@ class Interface:
 
     def draw_resource_counter(self, x, title, amount, *, energy):
         accent, background = (PURPLE, '#2b2140') if energy else (GOLD, '#382918')
-        self.canvas.rect(x, 26, 82, 54, background, outline=accent)
+        self.pixel_frame((x, 26, 82, 54), background, accent)
         self.label(x + 9, 38, *title, 12, MUTED)
-        self.draw_resource_icon(x + 18, 63, energy=energy, scale=1.5)
-        self.text(x + 73, 63, str(amount), 24, accent, 'e')
+        self.draw_resource_icon(x + 16, 60, energy=energy, scale=1.5)
+        self.text(x + 51, 60, str(amount), 24, accent, 'center')
 
     def draw_hud(self):
         draw, game = self.canvas, self.game
-        draw.rect(20, 18, 1112, 72, PANEL, outline=BORDER)
+        self.pixel_frame((20, 18, 1112, 72), PANEL, step=6, rim=3)
+        for x in (317, 528, 751):
+            draw.rect(x, 30, 2, 48, FRAME_INK)
+            draw.rect(x + 2, 33, 1, 42, FRAME_EDGE)
         self.label(37, 42, '大禮堂防衛戰', 'AUDITORIUM DEFENSE', 22)
         self.label(38, 68, '國立清華大學', 'NATIONAL TSING HUA UNIVERSITY', 12, MUTED)
         self.label(338, 39, '守衛生命', 'DEFENDER HP', 14, BLUE)
@@ -918,7 +1010,7 @@ class Interface:
                    10, TEXT, 'center')
         for row in range(BOSS_PHASE_COUNT):
             bar_y = y + row * 11
-            self.canvas.rect(x, bar_y, width, height, '#08121b', outline='#75444a')
+            self.canvas.rect(x, bar_y, width, height, FRAME_INK, outline='#75444a')
             phase = BOSS_PHASE_COUNT - 1 - row
             if phase < self.game.boss_phase:
                 fraction = 0.0
@@ -926,13 +1018,12 @@ class Interface:
                 fraction = max(0.0, boss.hp / boss.max_hp)
             else:
                 fraction = 1.0
-            filled = int((width - 4) * fraction)
-            if filled:
-                self.canvas.rect(x + 2, bar_y + 2, filled, height - 4, RED)
+            self.bar(x + 2, bar_y + 2, width - 4, height - 4, fraction, RED)
 
     def draw_side(self):
         draw, game = self.canvas, self.game
-        draw.rect(*SIDE, PANEL, outline=BORDER)
+        self.pixel_frame(SIDE, PANEL, step=6, rim=3)
+        draw.rect(868, 146, 246, 2, FRAME_EDGE)
         self.label(868, 135, '戰況', 'STATUS', 15, MUTED)
         if game.phase == 'prepare' or (game.phase == 'pause' and self.before_pause == 'prepare'):
             self.draw_preparation()
@@ -948,7 +1039,7 @@ class Interface:
         self.label(868, 184, f'第 {game.wave + 1} 波', f'Wave {game.wave + 1}', 26)
         self.label(868, 218, f'剩餘敵人   {left}', f'Enemies remaining   {left}', 17)
         self.label(868, 253, f'已擊倒   {game.kills}', f'Defeated   {game.kills}', 17)
-        draw.line((869, 285), (1112, 285), BORDER)
+        draw.rect(868, 285, 246, 2, FRAME_EDGE)
         self.label(868, 318, f'等級 {game.level}', f'Level {game.level}', 20, GREEN)
         percent = min(100, round(100 * game.xp / game.next_xp))
         self.text(1111, 319, f'{percent}%', 15, MUTED, 'e')
@@ -969,7 +1060,7 @@ class Interface:
         percent = min(100, round(100 * game.xp / game.next_xp))
         self.label(868, 199, f'等級 {game.level}　經驗 {percent}%',
                    f'Level {game.level}　XP {percent}%', 13, GREEN)
-        instructions = ('Enter 建造', 'Enter builds')
+        instructions = ('←→ 選建造點　↑↓ 選設施', '←→ select pad   ↑↓ select defense')
         self.label(868, 216, *instructions, 11, MUTED)
         pad_index = self.prepare_focused_pad
         tower = game.towers[pad_index]
@@ -985,26 +1076,35 @@ class Interface:
         self.label(868, 237, f'建造點 {pad_index + 1}   {pad_status}',
                    f'Pad {pad_index + 1}   {pad_status}', 15, BLUE)
         self.prepare_defense_button_start = len(self.buttons)
+        hovered_defense = None
         for index, defense in enumerate(DEFENSES):
-            y = 251 + index * 43
-            cost = defense.cost
-            self.button_surface((868, y, 246, 30), DEFENSES[0].color,
-                                hover_fill=False)
-            self.text(878, y + 15, f'{index + 1}  {self.word(*defense.name)}',
-                      12, TEXT, 'w')
-            parts_cost = (f'{cost[0]} 零件' if self.canvas.chinese
-                          else f'{cost[0]} P')
-            energy_cost = (f'{cost[1]} 能量' if self.canvas.chinese
-                           else f'{cost[1]} E')
-            self.text(1035, y + 15, parts_cost, 12, GOLD, 'e')
-            self.text(1108, y + 15, energy_cost, 12, PURPLE, 'e')
+            y = 251 + index * 45
+            bounds = (865, y, 252, 40)
+            center_y = y + 20
+            self.button_surface(bounds, defense.color)
+            self.text(876, center_y, f'{index + 1}  {self.word(*defense.name)}', 15)
+            parts, energy = defense.cost
+            self.draw_resource_icon(1033, center_y, energy=False)
+            self.text(1056, center_y, str(parts), 14, GOLD, 'e')
+            self.draw_resource_icon(1076, center_y, energy=True)
+            self.text(1104, center_y, str(energy), 14, PURPLE, 'e')
             self.buttons.append(Button(
-                (868, y, 246, 30),
-                lambda kind=index: self.build_defense(kind),
+                bounds, lambda kind=index: self.build_defense(kind),
             ))
-            self.label(878, y + 32, *defense.description, 12, MUTED)
+            if inside(*self.pointer, bounds):
+                hovered_defense = index
+        if game.phase == 'prepare':
+            active_defense = hovered_defense
+            if (active_defense is None and self.prepare_focus_area != 'pad'
+                    and self.focused_button_index is not None):
+                focus = self.focused_button_index - self.prepare_defense_button_start
+                if 0 <= focus < len(DEFENSES):
+                    active_defense = focus
+            if active_defense is not None:
+                self.draw_defense_tooltip(active_defense)
         self.button(868, 480, 246, 35,
-                    ('R  修理禮堂   4 零件', 'R  Repair auditorium   4P'),
+                    (f'R  修理禮堂   {REPAIR_COST} 零件',
+                     f'R  Repair auditorium   {REPAIR_COST}P'),
                     game.repair, GREEN, True, size=13)
         next_cost = (UPGRADE_COSTS[tower.upgrade_level - 1]
                      if tower is not None and tower.upgrade_level < 3 else None)
@@ -1028,15 +1128,46 @@ class Interface:
         self.button(868, 585, 246, 43, start_title, self.start_next_wave,
                     RED, True, size=14)
 
+    def draw_defense_tooltip(self, index):
+        defense = DEFENSES[index]
+        _, row_y, _, row_height = self.buttons[self.prepare_defense_button_start + index].bounds
+        x, width, height = 519, 322, 114
+        row_center = row_y + row_height / 2
+        min_y = 225 if self.game.tutorial_active else FIELD[1] + 8
+        y = max(min_y, row_center - height / 2)
+        self.pixel_frame((x, y, width, height), PANEL, defense.color, step=5)
+        self.canvas.polygon(
+            ((x + width - 2, row_center - 7), (860, row_center),
+             (x + width - 2, row_center + 7)),
+            PANEL, outline=defense.color,
+        )
+        self.pixel_frame((x + 12, y + 25, 65, 65), FRAME_INSET, defense.color)
+        self.canvas.portrait(defense.artwork, x + 17, y + 30, 55)
+        self.label(x + 88, y + 23, *defense.name, 17, defense.color)
+        description = defense.description
+        if defense.mode == 'trap':
+            description = ('淹沒單一敵人，Boss 則受到傷害。',
+                           'Defeats one enemy. Damages bosses.')
+        for line_index, line in enumerate(wrap(self.word(*description), width=32)):
+            self.text(x + 88, y + 49 + line_index * 17, line, 13, TEXT)
+        if defense.durability:
+            stats = (f'耐久 {defense.durability}', f'Durability {defense.durability}')
+        else:
+            reach = self.relative_range(defense.reach)
+            stats = (f'範圍 {reach}　冷卻 {defense.interval:g} 秒',
+                     f'Range {reach}   Cooldown {defense.interval:g}s')
+        self.label(x + 88, y + 91, *stats, 12, MUTED)
+
     def overlay(self, x, y, width, height):
         self.buttons.clear()
-        self.canvas.rect(x + 7, y + 8, width, height, '#09121b')
-        self.canvas.rect(x, y, width, height, '#172a3a', outline='#52788b', line_width=2)
+        self.pixel_box((x + 6, y + 7, width, height), FRAME_INK, 8)
+        self.pixel_frame((x, y, width, height), PANEL, step=8, rim=4)
 
     def draw_title(self):
         self.overlay(308, 171, 536, 365)
         self.label(576, 195, '國立清華大學', 'NATIONAL TSING HUA UNIVERSITY', 15, BLUE, 'center')
-        self.canvas.image('auditorium_title', 456, 204)
+        self.pixel_frame((451, 207, 250, 142), FRAME_INSET)
+        self.canvas.image('auditorium_title', 456, 212)
         self.label(576, 369, '大禮堂防衛戰', 'Auditorium Defense', 42, TEXT, 'center')
         self.label(576, 413, '普通模式五波；困難模式八波並迎戰兩次 Boss。',
                    'Normal: 5 waves. Hard: 8 waves and two boss fights.', 16, MUTED, 'center')
@@ -1227,9 +1358,8 @@ class Interface:
 
         name_zh, name_en, artwork, rows = profiles[self.encyclopedia_index]
         portrait_x, portrait_y, portrait_size = 133, 224, 176
-        self.canvas.rect(portrait_x - 5, portrait_y - 5,
-                         portrait_size + 10, portrait_size + 10,
-                         '#203345', outline=BLUE, line_width=2)
+        self.pixel_frame((portrait_x - 6, portrait_y - 6,
+                          portrait_size + 12, portrait_size + 12), FRAME_INSET, BLUE)
         self.canvas.portrait(artwork, portrait_x, portrait_y, portrait_size)
         self.label(portrait_x + portrait_size / 2, 425, name_zh, name_en,
                    22, TEXT, 'center')
@@ -1248,20 +1378,103 @@ class Interface:
         self.button(870, 608, 164, 42, ('返回', 'Back'),
                     self.close_encyclopedia, GREEN, True, size=14)
 
+    def tutorial_marker(self, bounds, *, from_left=False):
+        """Mark a target without covering its image or intercepting clicks."""
+        x, y, width, height = bounds
+        draw = self.canvas
+        color = GOLD if int(self.focus_flash_elapsed * 4) % 2 == 0 else '#d8a659'
+        for left, direction_x in ((x, 1), (x + width, -1)):
+            for top, direction_y in ((y, 1), (y + height, -1)):
+                for end in ((left + 11 * direction_x, top), (left, top + 11 * direction_y)):
+                    draw.line((left, top), end, FRAME_INK, width=6)
+                    draw.line((left, top), end, color, width=2)
+        if from_left:
+            middle = y + height / 2
+            arrow = ((x - 16, middle - 6), (x - 5, middle), (x - 16, middle + 6))
+        else:
+            middle = x + width / 2
+            arrow = ((middle - 6, y - 12), (middle + 6, y - 12), (middle, y - 3))
+        draw.polygon(arrow, color, outline=FRAME_INK)
+
+    def draw_tutorial_targets(self):
+        game, step = self.game, self.tutorial_step
+        if step == TUTORIAL_MOVE:
+            self.tutorial_marker((game.player_x - 24, game.player_y - 82, 48, 101))
+        elif step == TUTORIAL_MELEE and game.enemies:
+            enemy = game.enemies[0]
+            self.tutorial_marker((enemy.x - 25, enemy.y - 58, 50, 76))
+        elif step == TUTORIAL_GATHER and game.drops:
+            left = min(drop.x for drop in game.drops) - 14
+            top = min(drop.y for drop in game.drops) - 14
+            right = max(drop.x for drop in game.drops) + 14
+            bottom = max(drop.y for drop in game.drops) + 14
+            self.tutorial_marker((left, top, right - left, bottom - top))
+        elif step in (TUTORIAL_PAD, TUTORIAL_BUILD, TUTORIAL_UPGRADE):
+            index = self.prepare_focused_pad
+            if step == TUTORIAL_UPGRADE and game.towers[index] is None:
+                index = next(i for i, tower in enumerate(game.towers) if tower is not None)
+            x, y = ALL_PADS[index]
+            self.tutorial_marker((x - 29, y - 32, 58, 62), from_left=y < 263)
+
+        button_offset = {
+            TUTORIAL_BUILD: 1,
+            TUTORIAL_UPGRADE: len(DEFENSES) + 1,
+            TUTORIAL_REPAIR: len(DEFENSES),
+            TUTORIAL_START: len(DEFENSES) + 2,
+        }.get(step)
+        if button_offset is not None and game.phase == 'prepare':
+            x, y, width, height = self.buttons[
+                self.prepare_defense_button_start + button_offset
+            ].bounds
+            self.tutorial_marker((x - 3, y - 3, width + 6, height + 6), from_left=True)
+        if step == TUTORIAL_REPAIR:
+            self.tutorial_marker((541, 28, 207, 46), from_left=True)
+
     def draw_tutorial_hint(self):
-        if not self.game.tutorial_active:
+        if (not self.game.tutorial_active or self.game.phase not in ('combat', 'prepare')
+                or self.exit_confirmation):
             return
-        prompts = (
-            ('第 1 步：按 WASD 走一步。', 'Step 1: Move with WASD.'),
-            ('第 2 步：靠近熊，按 Space 或點擊場地施展近戰。', 'Step 2: Approach the bear, then press Space or click to melee.'),
-            ('第 3 步：靠近金色方塊，讓零件飛向你。', 'Step 3: Approach the gold square so the part flies to you.'),
-            ('第 4 步：選空建造點，按 2 或點選「施工圍牆」。', 'Step 4: Select an empty pad, then press 2 or choose Construction wall.'),
-            ('完成！按 Backspace 重置並開始正式第一波。',
-             'Complete! Press Backspace to reset and begin Wave 1.'),
+        lessons = (
+            (('移動守衛', 'Move the defender'), ('W', 'A', 'S', 'D'),
+             ('按任一移動鍵，讓框住的守衛走一步。', 'Press any movement key to move the highlighted defender.'),
+             ('守住禮堂，並照顧左上方顯示的守衛生命。', 'Protect the auditorium and keep the defender alive.')),
+            (('近戰與遠程攻擊', 'Melee and ranged attacks'), ('SPACE',),
+             ('靠近亮框內的熊，按空白鍵或點擊場地施展近戰。', 'Approach the bear. Press Space or click the field to use melee.'),
+             ('正式戰鬥時，守衛也會自動朝附近的敵人射擊。', 'During live waves, the defender also fires at nearby enemies automatically.')),
+            (('收集兩種資源', 'Collect both resources'), ('W', 'A', 'S', 'D'),
+             ('走向亮框內的掉落物，收集金色零件和紫色能量。', 'Walk toward the highlighted gold parts and purple energy.'),
+             ('靠近後會自動吸取，數量會顯示在畫面右上方。', 'Drops fly to you when you get close. Their totals appear at the top.')),
+            (('選擇建造點', 'Choose a build pad'), ('←', '→'),
+             ('點擊場上有編號的空位，或按左右鍵切換。', 'Click a numbered empty pad or use the left and right arrows.'),
+             ('已補足練習資源。框線指出目前要操作的位置。', 'Practice resources are ready. The bright corners mark the current target.')),
+            (('建造防禦設施', 'Build a defense'), ('2', 'ENTER'),
+             ('點右側亮框內的「施工圍牆」，或按 2 建造。', 'Click the highlighted Construction wall button or press 2.'),
+             ('上下鍵可選其他設施，Enter 確認。停在選項上可看效果。', 'Use up/down to choose another defense and Enter to build. Hover to see details.')),
+            (('升級建好的設施', 'Upgrade a defense'), ('U',),
+             ('選中已建好的設施，再點右側亮框或按 U 升級。', 'Select the built defense, then click the highlighted button or press U.'),
+             ('升級會消耗零件與能量，效果依設施種而異。', 'Upgrades cost parts and energy. Their benefits depend on the defense.')),
+            (('修復大禮堂', 'Repair the auditorium'), ('R',),
+             ('禮堂耐久已降低供練習。點右側亮框或按 R 修復。', 'The auditorium needs a practice repair. Click the highlighted button or press R.'),
+             ('修復會消耗零件。實戰中，紅光提醒你禮堂受傷。', 'Repairs use parts. During a live wave, red edges warn you when the auditorium takes damage.')),
+            (('開始正式第一波', 'Start the first live wave'), ('BACKSPACE',),
+             ('點右側亮框或按 Backspace，從頭開始正式遊戲。', 'Click the highlighted button or press Backspace to start a fresh run.'),
+             ('戰鬥中可按 Q 切換倍速、Esc 暫停。擊倒敵人可累積經驗。', 'Q changes speed, Esc pauses, and defeating enemies earns experience.')),
         )
-        chinese, english = prompts[self.tutorial_step]
-        self.canvas.rect(42, 604, 768, 43, '#183b46', outline=GREEN, line_width=2)
-        self.label(426, 625, chinese, english, 16, TEXT, 'center')
+        step = self.tutorial_step
+        title, keys, instruction, hint = lessons[step]
+        self.draw_tutorial_targets()
+        self.pixel_frame((42, 118, 768, 82), FRAME_INSET, GOLD, rim=3)
+        self.pixel_frame((55, 126, 53, 24), FRAME_INK, GOLD, step=2, rim=1)
+        self.text(81, 138, f'{step + 1}/{len(lessons)}', 13, GOLD, 'center')
+        self.label(122, 138, *title, 19, TEXT)
+        right = 792
+        for key in reversed(keys):
+            width = max(32, 14 + 9 * len(key))
+            self.pixel_frame((right - width, 126, width, 24), FRAME_INK, GOLD, step=2, rim=1)
+            self.text(right - width / 2, 138, key, 13, GOLD, 'center')
+            right -= width + 6
+        self.label(58, 163, *instruction, 15, TEXT)
+        self.label(58, 184, *hint, 13, MUTED)
 
     def draw_upgrade(self):
         self.overlay(230, 252, 692, 222)
@@ -1302,7 +1515,7 @@ class Interface:
         game = self.game
         if self.drawn_phase != game.phase:
             if game.phase == 'prepare':
-                self.prepare_focus_area = 'controls'
+                self.prepare_focus_area = 'pad'
                 self.prepare_focused_pad = game.selected_pad
                 self.prepare_focused_defense_kind = self.selected_defense_kind
                 self.prepare_selection_active = False
@@ -1321,15 +1534,21 @@ class Interface:
         self.draw_field()
         self.draw_entities()
         self.cover_outside_field()
+        if self.base_damage_flash and game.phase in ('combat', 'prepare', 'upgrade', 'loss'):
+            remaining = self.base_damage_flash / BASE_DAMAGE_FLASH_DURATION
+            strength = remaining * (0.72 + 0.28 * cos((1 - remaining) * 4 * pi))
+            self.canvas.damage_vignette(FIELD, strength)
         self.draw_hud()
         self.draw_boss_bar()
         self.draw_side()
         self.draw_tutorial_hint()
-        if game.notice_left > 0 and game.phase in ('combat', 'prepare'):
-            self.label(23, 690, *game.notice, 16, GOLD)
-        elif game.phase in ('combat', 'prepare'):
-            self.label(23, 690, '藍圈是守衛；敵人外觀表示種類，金圈表示暈眩。',
-                       'Blue ring marks the defender; sprites show enemy types, gold means stunned.', 14, MUTED)
+        if game.phase in ('combat', 'prepare'):
+            self.pixel_frame((20, 672, 1112, 36), PANEL)
+            if game.notice_left > 0:
+                self.label(36, 690, *game.notice, 16, GOLD)
+            else:
+                self.label(36, 690, '藍圈是守衛；敵人外觀表示種類，金圈表示暈眩。',
+                           'Blue ring marks the defender; sprites show enemy types, gold means stunned.', 14, MUTED)
         if game.phase == 'pause':
             self.focused_button_index = pause_menu_focus
         if game.phase == 'title':

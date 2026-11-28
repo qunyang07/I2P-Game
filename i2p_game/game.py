@@ -738,7 +738,9 @@ class Game:
                 self.drops.append(Drop(enemy.x, enemy.y - 9, energy=True))
             else:
                 self.drops.append(Drop(enemy.x - 8, enemy.y))
-            if self.difficulty != 'hard' and (self.kills % 2 == 0 or ENEMY_KINDS[enemy.kind].boss):
+            if self.difficulty != 'hard' and (
+                self.tutorial_active or self.kills % 2 == 0 or ENEMY_KINDS[enemy.kind].boss
+            ):
                 self.drops.append(Drop(enemy.x + 8, enemy.y, energy=True))
         self.enemies = survivors
         living_stunned = {id(enemy) for enemy in survivors if enemy.stunned > 0}
